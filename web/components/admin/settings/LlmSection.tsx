@@ -1285,31 +1285,43 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         )}
       </Card>
 
-      <Card title="Task Model Overrides" sub="route specific tasks to a different model">
-        <div className="field">
-          <Label>Banter</Label>
-          <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
-            {primaryDiscovery.models.length > 0 ? (
-              <ModelCombobox
-                models={primaryDiscovery.models}
-                value={form.llm.modelOverrides?.['banter'] || ''}
-                onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, modelOverrides: { ...(f.llm.modelOverrides || {}), banter: v } } }))}
-                placeholder="Default model"
-              />
-            ) : (
-              <Input
-                value={form.llm.modelOverrides?.['banter'] || ''}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setForm(f => ({ ...f, llm: { ...f.llm, modelOverrides: { ...(f.llm.modelOverrides || {}), banter: e.target.value } } }))
-                }
-                placeholder="model id (blank to use default)"
-                className="max-w-[360px]"
-              />
-            )}
-          </div>
+      <Card title="Task Model Overrides" sub="route specific agent tasks to a different model">
+        <div className="grid gap-[18px]">
           <div className="field-hint">
-            Overrides the model for multi-speaker banter. Leave blank to use the primary model.
+            The tasks below default to using the primary model. To route a heavy task (like Banter) to a larger model while keeping the station running on a smaller, faster model (like Flash Lite), select an override model below. The overrides apply to the <strong>primary provider</strong> only.
           </div>
+          {[
+            { id: 'generateBanter', label: 'Presenter Banter', desc: 'Multi-speaker dynamic conversation between two personas' },
+            { id: 'djAgentSegment', label: 'Script Generation', desc: 'Single-speaker scripts for news, weather, and deep-cuts' },
+            { id: 'djAgentPick', label: 'Track Selection', desc: 'The AI DJ picking the next track from the library' },
+            { id: 'djAgentRequest', label: 'Listener Requests', desc: 'Negotiation and fulfillment of incoming track requests' },
+            { id: 'matchRequest', label: 'Request Matcher', desc: 'Matching a requested song text against the local library' },
+            { id: 'identifyRequest', label: 'Search Identifier', desc: 'Searching the web to identify a vague request description' }
+          ].map(task => (
+            <div className="field" key={task.id}>
+              <Label>{task.label}</Label>
+              <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
+                {primaryDiscovery.models.length > 0 ? (
+                  <ModelCombobox
+                    models={primaryDiscovery.models}
+                    value={form.llm.modelOverrides?.[task.id] || ''}
+                    onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, modelOverrides: { ...(f.llm.modelOverrides || {}), [task.id]: v } } }))}
+                    placeholder="Use primary model"
+                  />
+                ) : (
+                  <Input
+                    value={form.llm.modelOverrides?.[task.id] || ''}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({ ...f, llm: { ...f.llm, modelOverrides: { ...(f.llm.modelOverrides || {}), [task.id]: e.target.value } } }))
+                    }
+                    placeholder="Use primary model (or type model ID)"
+                    className="max-w-[360px]"
+                  />
+                )}
+              </div>
+              <div className="field-hint">{task.desc}</div>
+            </div>
+          ))}
         </div>
       </Card>
       </Advanced>
