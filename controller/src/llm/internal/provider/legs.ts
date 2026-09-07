@@ -33,8 +33,10 @@ function labelFor(cfg: any): string {
 // The active primary leg. Throws on a misconfigured primary (empty model on a
 // cloud provider) exactly as languageModel() does today — that's a hard error
 // the caller surfaces, not something to silently route around.
-export function primaryLeg(): Leg {
+export function primaryLeg(kind?: string): Leg {
   const cfg = llmCfg();
+  const overrides = settings.get().llm?.modelOverrides; 
+  if (kind && overrides?.[kind]) cfg.model = overrides[kind];
   return { cfg, model: languageModel(cfg), noThinkModel: languageModel(cfg, { forceNoThink: true }), label: labelFor(cfg) };
 }
 

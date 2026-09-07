@@ -345,6 +345,7 @@ export const DEFAULTS = {
   llm: {
     provider: 'ollama',
     model: '',
+    modelOverrides: {} as Record<string, string>,
     // Legacy single inline-key slot, superseded by `keys`. Always '' after
     // load(); resolution reads `keys`, never this.
     apiKey: '',

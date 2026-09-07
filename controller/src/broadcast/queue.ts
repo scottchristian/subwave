@@ -26,7 +26,7 @@ import * as showBoundary from './show-boundary.js';
 import * as blocklist from '../music/blocklist.js';
 import { artistRootKey, trackKey, type CandidateLike } from '../music/recency.js';
 import { albumKeyFor } from '../music/album-facts.js';
-import { speak, voiceGainDb } from '../audio/tts.js';
+import { speak, speakExchange, voiceGainDb } from '../audio/tts.js';
 import * as djAgent from './dj-agent.js';
 import * as programme from './programme.js';
 import * as sfx from './sfx.js';
@@ -1860,10 +1860,19 @@ class Queue {
   // speaker, so windowMessages names a guest's words as theirs.
   async announceExchange(lines: { persona: Persona; text: string }[], kind = 'banter') {
     const rendered: { persona: Persona; text: string; wavPath: string }[] = [];
+    let isBatched = false;
     try {
-      for (const l of lines) {
-        const wavPath = await speak(l.text, { kind, persona: l.persona });
-        rendered.push({ ...l, wavPath });
+      try {
+        const wavPath = await speakExchange(lines, { kind });
+        const combinedText = lines.map(l => `${l.persona?.name || 'DJ'}: ${l.text}`).join('\n');
+        rendered.push({ persona: lines[0].persona, text: combinedText, wavPath });
+        isBatched = true;
+      } catch (err) {
+        this.log('scheduler', `Batch multi-speaker failed (or unsupported): ${(err as Error).message}. Falling back to sequential rendering.`);
+        for (const l of lines) {
+          const wavPath = await speak(l.text, { kind, persona: l.persona });
+          rendered.push({ ...l, wavPath });
+        }
       }
     } catch (err) {
       this.log('error', `Exchange render failed: ${(err as Error).message}`);
@@ -1875,13 +1884,15 @@ class Queue {
       this.holdForNextTrack(
         kind,
         rendered.map(l => ({ text: l.text, wavPath: l.wavPath, persona: l.persona, meta: {} })),
-        { exchange: true },
+        { exchange: !isBatched },
       );
       return true;
     }
     for (const l of rendered) {
       try {
-        const seg: SegmentDesc = exchangeSegment(l, kind);
+        const seg: SegmentDesc = isBatched
+          ? { kind, channel: 'say', text: l.text, persona: l.persona }
+          : exchangeSegment(l, kind);
         const handoff = await airVoice(config.liquidsoap.sayFile, l.wavPath, l.text, voiceGainDb(kind, l.persona), {
           onQueued: q => this.onQueued(q, seg),
         });
@@ -1892,10 +1903,17 @@ class Queue {
     }
     // One webhook for the whole exchange — per-line events would read as five
     // separate segments to a Discord pipe.
-    webhooks.notify('dj.say', {
-      text: rendered.map(l => `${l.persona?.name || 'DJ'}: ${l.text}`).join('\n'),
-      kind,
-    });
+    if (!isBatched) {
+      webhooks.notify('dj.say', {
+        text: rendered.map(l => `${l.persona?.name || 'DJ'}: ${l.text}`).join('\n'),
+        kind,
+      });
+    } else {
+      webhooks.notify('dj.say', {
+        text: rendered[0].text,
+        kind,
+      });
+    }
     return true;
   }
 

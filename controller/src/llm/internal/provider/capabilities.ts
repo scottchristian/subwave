@@ -180,7 +180,7 @@ const CAPS: Record<string, ProviderCapabilities> = {
     // The gemma- test mirrors @ai-sdk/google's own guard (startsWith('gemma-')).
     // forceNoThink not factored — Gemini permits forced tools while reasoning.
     reasoningLevel: ({ modelId, reasoning }) =>
-      (reasoning || /(^|\/)gemma-/i.test(modelId) ? undefined : 'none'),
+      (reasoning || /(^|\/)gemma-/i.test(modelId) || /flash/i.test(modelId) ? undefined : 'none'),
     discoverySteps: NATIVE_DISCOVERY_STEPS,
   },
   deepseek: {

@@ -131,3 +131,32 @@ export async function speak(
   }
   return outPath;
 }
+
+export async function speakMulti(
+  lines: { text: string; voice?: string }[],
+  { outPath: customPath }: { outPath?: string } = {},
+): Promise<string> {
+  const url = getUrl();
+  if (!url) throw new Error('remote TTS URL not configured');
+  if (!lines || lines.length === 0) throw new Error('Empty TTS lines');
+
+  const outPath = customPath || path.join(config.piper.outDir, `${crypto.randomBytes(6).toString('hex')}.wav`);
+  await mkdir(path.dirname(outPath), { recursive: true });
+
+  const res = await fetchWithTimeout(`${url}/speak-multi`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ lines: lines.map(l => ({ text: l.text.trim(), voice: l.voice ?? '' })) }),
+    timeoutMs: REQUEST_TIMEOUT_MS,
+  });
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => '');
+    throw new Error(`remote TTS multi ${res.status}: ${errBody || res.statusText}`);
+  }
+
+  const audio = Buffer.from(await res.arrayBuffer());
+  if (audio.length === 0) throw new Error('remote TTS returned an empty response body for speakMulti');
+  await writeFile(outPath, audio);
+
+  return outPath;
+}

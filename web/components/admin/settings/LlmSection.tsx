@@ -218,6 +218,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
       llm: {
         provider: activeProvider,
         model: form.llm.model,
+        modelOverrides: form.llm.modelOverrides ?? {},
         ollamaUrl: form.llm.ollamaUrl,
         numCtx: form.llm.numCtx,
         repeatPenalty: form.llm.repeatPenalty,
@@ -1282,6 +1283,34 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             />
           </div>
         )}
+      </Card>
+
+      <Card title="Task Model Overrides" sub="route specific tasks to a different model">
+        <div className="field">
+          <Label>Banter</Label>
+          <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
+            {primaryDiscovery.models.length > 0 ? (
+              <ModelCombobox
+                models={primaryDiscovery.models}
+                value={form.llm.modelOverrides?.['banter'] || ''}
+                onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, modelOverrides: { ...(f.llm.modelOverrides || {}), banter: v } } }))}
+                placeholder="Default model"
+              />
+            ) : (
+              <Input
+                value={form.llm.modelOverrides?.['banter'] || ''}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setForm(f => ({ ...f, llm: { ...f.llm, modelOverrides: { ...(f.llm.modelOverrides || {}), banter: e.target.value } } }))
+                }
+                placeholder="model id (blank to use default)"
+                className="max-w-[360px]"
+              />
+            )}
+          </div>
+          <div className="field-hint">
+            Overrides the model for multi-speaker banter. Leave blank to use the primary model.
+          </div>
+        </div>
       </Card>
       </Advanced>
 

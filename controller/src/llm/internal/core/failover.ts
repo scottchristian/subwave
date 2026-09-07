@@ -98,7 +98,7 @@ export async function withFailover<T>(
   pin?: 'primary' | 'fallback',
 ): Promise<T> {
   if (pin) {
-    const leg = pin === 'fallback' ? fallbackLeg() : primaryLeg();
+    const leg = pin === 'fallback' ? fallbackLeg() : primaryLeg(kind);
     if (!leg) throw new Error(`withFailover: pinned leg "${pin}" is not configured`);
     const started = Date.now();
     try {
@@ -111,7 +111,7 @@ export async function withFailover<T>(
       throw err;
     }
   }
-  const primary = primaryLeg();
+  const primary = primaryLeg(kind);
   const primaryStarted = Date.now();
   try {
     const r = await attempt(primary);

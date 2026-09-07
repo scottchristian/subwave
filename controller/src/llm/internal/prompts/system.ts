@@ -33,6 +33,9 @@ const ELEVENLABS_V3_TAG_HINT =
 const FISH_S21_TAG_HINT =
   '\n\nYou may sparingly add a short natural-language performance cue in square brackets, such as [laughing nervously], [whispers], or [soft and warm]. Use at most one per segment, only when it genuinely improves the delivery, and never as filler.';
 
+const GEMINI_TTS_TAG_HINT =
+  '\n\nYou may sparingly insert non-verbal cues in square brackets: [laughing], [sigh], [uhm], [short pause], [medium pause], [long pause], [sarcasm], [robotic], [shouting], [whispering], [extremely fast]. Use them only where genuinely natural — at most one per segment, and never as filler.';
+
 // `persona` overrides the on-air persona — used by the persona-handoff
 // generators (generateSignoff / generateHandoffGreeting) to render the sign-off
 // under the OUTGOING persona and the greeting under the incoming one, since the
@@ -57,13 +60,14 @@ export function djSystem(
     // The broad on-air location, never the precise weather label — this is the
     // string the DJ speaks as "broadcasting from {location}".
     location: settings.resolveOnAirLocation(s),
-  }) + settings.onAirRosterClause(persona);
+  }) + settings.onAirRosterClause(persona) + '\n\nIMPORTANT: Do not mention, assume, or invent the current weather (e.g. do not say "enjoy the sunshine" or "stay warm"). The weather is handled by a dedicated segment, so do not discuss it here.\n\nWhen guessing what listeners are doing right now, vary it heavily. They could be dealing with customers, putting up with dumb people, doing yard work on a ride-on mower, stuck at a computer doing spreadsheets, driving, or just relaxing. Do not always assume they are in an office doing spreadsheets.';
   // Resolved, not raw: a persona on the 'inherit' sentinel has no engine of its
   // own, so asking the slot directly reads "pinned to something that is not
   // chatterbox" and drops the hint on a station whose default IS chatterbox —
   // the same miss resolvePersonaVoiceSlot() exists to close in cloud-speech.ts.
   const engine = resolvePersonaVoiceSlot(persona?.tts, s.tts)?.engine;
   if (engine === 'chatterbox') return base + CHATTERBOX_TAG_HINT;
+  if (engine === 'remote') return base + GEMINI_TTS_TAG_HINT;
   // Provider/model resolution is non-empty only when the persona actually
   // resolves to a configured cloud engine — including via the station default
   // when the persona sets no engine. That fail-closed check keeps cues away

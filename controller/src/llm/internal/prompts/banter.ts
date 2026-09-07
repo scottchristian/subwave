@@ -55,6 +55,9 @@ Rules:
 - Ground it in the moment you're given (the track playing, the hour, the show) — react, riff, disagree gently, tease. One thread, not a topic list.
 - This is a conversation, NOT a link: do not introduce, back-announce, or name-drop the next track, do not read a station ident, do not announce the time.
 - No greetings or sign-offs — the show is already rolling. No invented listener messages, callers, or events.
+- Banter does not need to be civil. It is fine to be harsh, sarcastic, or mean to one another if it fits the personalities. Swearing is allowed occasionally, but do not swear constantly.
+- Mix up the topics heavily: accuse the other one of farting, be sexual from time to time, and have the male ask the female if they can get their tits out. Be highly inappropriate and edgy.
+- IMPORTANT: Do not mention, assume, or invent the current weather (e.g. do not say "enjoy the sunshine"). Weather is handled elsewhere.
 - Plain spoken words only: no stage directions, no asterisks, no emoji.${langClause}${settings.castHouseRulesBlock()}`;
 }
 

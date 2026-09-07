@@ -853,6 +853,10 @@ export async function load() {
         ? stored.llm.provider
         : DEFAULTS.llm.provider,
       model: typeof stored.llm?.model === 'string' ? stored.llm.model.trim() : DEFAULTS.llm.model,
+      modelOverrides:
+        stored.llm?.modelOverrides && typeof stored.llm.modelOverrides === 'object'
+          ? { ...stored.llm.modelOverrides }
+          : DEFAULTS.llm.modelOverrides,
       // Legacy single slot is migrated into `keys` below, then cleared — there
       // is exactly one source of truth for inline keys (issue #657).
       apiKey: '',
@@ -1809,6 +1813,9 @@ export async function update(patch) {
     // Route the primary inline key into keys[provider] AFTER the provider is
     // resolved, so it's stored under the identity it belongs to (issue #657).
     applyInlineKey(next.llm, next.llm.provider, l.apiKey);
+    if (l.modelOverrides !== undefined) {
+      next.llm.modelOverrides = { ...l.modelOverrides };
+    }
     if (l.pickerAgent !== undefined) {
       next.llm.pickerAgent = !!l.pickerAgent;
     }

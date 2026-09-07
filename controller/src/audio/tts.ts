@@ -612,6 +612,64 @@ export async function speak(
   }
 }
 
+// Attempt to speak an entire multi-voice exchange at once if all speakers
+// are configured to use the `remote` engine. This is significantly faster
+// and allows the LLM to hear the full conversation flow (Gemini Multi-Speaker).
+// Throws if any line isn't using the remote engine (caller should fallback to per-line).
+export async function speakExchange(
+  lines: { persona: any; text: string }[],
+  { kind = 'banter', outPath }: { kind?: string; outPath?: string } = {},
+): Promise<string> {
+  const remoteLines: { text: string; voice?: string }[] = [];
+  
+  for (const l of lines) {
+    const personaTts = djPersonaTts(kind, l.persona);
+    const slot = resolveEngine(kind, personaTts);
+    if (slot.engine !== 'remote') {
+      throw new Error('speakExchange only supports the remote engine for all speakers');
+    }
+    
+    // We must pass the raw text and the persona voice
+    const speakText = scrubCjkForSpeech(
+      normalizeForSpeech(stripThinking(l.text), settings.get().tts?.corrections),
+      String(personaFor(l.persona)?.language || '').trim()
+    );
+    
+    const primaryPersonaTts = slot.personaTts ?? personaTts;
+    const voice = (primaryPersonaTts && primaryPersonaTts.engine === 'remote' && primaryPersonaTts.voice)
+      ? primaryPersonaTts.voice
+      : undefined;
+      
+    remoteLines.push({ text: speakText, voice });
+  }
+
+  const started = Date.now();
+  try {
+    const result = await remoteTts.speakMulti(remoteLines, { outPath });
+    if (typeof result === 'string') await applyEdgeFades(result);
+    
+    // Log a single aggregate entry in the TTS ring buffer
+    const combinedText = lines.map(l => `${l.persona?.name || 'DJ'}: ${l.text}`).join('\n').slice(0, 240);
+    recordTts({
+      kind, requested: 'remote', chars: combinedText.length,
+      text: combinedText, persona: 'Multi-Speaker',
+      engine: 'remote', fellBack: false,
+      ok: true, ms: Date.now() - started, t: new Date().toISOString(),
+    });
+    
+    return result;
+  } catch (err) {
+    recordTts({
+      kind, requested: 'remote', chars: 0,
+      text: 'Multi-speaker exchange failed', persona: 'Multi-Speaker',
+      engine: 'remote', fellBack: false,
+      ok: false, ms: Date.now() - started, error: (err as any).message,
+      t: new Date().toISOString(),
+    });
+    throw err;
+  }
+}
+
 // Re-exported so callers don't have to know which engine wrote the file.
 // Piper is the original owner of the voice output dir; cleanup is engine-agnostic
 // because every engine writes WAVs into the same directory.
