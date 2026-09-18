@@ -133,7 +133,7 @@ Because Subwave is frequently updated upstream, we have made the following custo
 - **Lidarr Auto-Requester Pipeline (`missed_requests_server.py`, `lidarr_sync_server.py`, `lidarr_watchdog.py`):**
     - **LLM Cleanup Routing:** `missed_requests_server.py` Phase 3 (LLM request cleanup) reads `GEMINI_BASE_URL` from `.env` and passes the API key in the `Authorization: Bearer` header, routing cleanly through 9router (OpenRouter) with the `gemini-3.6-flash` model.
     - **Generic Band Requests:** For requests like "some Foo Fighters", the pipeline sets the track to `Any` and triggers Lidarr to search for missing albums (`lidarr_album_id = ARTIST:{id}`). The watchdog then polls all tracks for the artist and plays the very first one that finishes downloading.
-    - **Fuzzy Title Matching:** `lidarr_sync_server.py` uses `rapidfuzz` to loosely match iTunes metadata track titles against Lidarr's track titles to prevent infinite rejection loops on slight spelling differences.
+    - **Fuzzy Title Matching:** `lidarr_watchdog.py` uses Python's built-in `difflib` to loosely match iTunes metadata track titles against Lidarr's track titles to prevent infinite rejection loops on slight spelling differences (e.g., "Act Yr Age" vs "Act Your Age").
     - **Watchdog IP Bypass:** `lidarr_watchdog.py` unconditionally injects the downloaded track into the station queue. The old logic that tried to query Icecast (`localhost:8000/admin/listclients`) to verify the listener's IP was removed because Icecast is isolated inside the Docker network.
 ## Deployments & Hot-Patching
 Because the production radio station on the Proxmox server (`192.168.68.196`) runs pre-built Subwave Docker images from GitHub Container Registry (GHCR) and does **not** contain a local git repository, any custom code modifications made to the local repository must be hot-patched into the live containers.
@@ -179,3 +179,12 @@ scp custom_assets/station_ident_default.wav root@192.168.68.196:/root/subwave/st
     - `lidarr_watchdog.py` — updated to include `"x-station-auth": "Midw@y!FM2026"` in the HTTP headers when submitting programmatic requests.
 - **Midway Tavern Happy Hour Skill Time-Gate:** Added `state/skills/midway-tavern/tool.mjs` — a custom script that checks the current Hobart (`Australia/Hobart`) timezone and only allows the skill to fire on **Thursday, Friday, or Saturday between 2 PM and 6 PM** local time. Returns `{ available: false }` at all other times to prevent the Happy Hour announcement from triggering incorrectly. The `SKILL.md` prompt was updated to specify **$6 schooners** as the happy hour special. The old cron-only schedule (`cron: 45 15 * * 5,6`) was removed in favour of this runtime check.
 - **Multi-Speaker Banter Queue Batching:** Modified `controller/src/broadcast/queue.ts` to have `announceExchange()` attempt to batch a full multi-speaker banter exchange through `tts.speakExchange()` as a single audio clip, falling back to sequential per-line rendering if the batch fails. **NEVER remove this batching logic** — the user explicitly wants to retain this architecture.
+
+## Common Errors & Troubleshooting
+
+### Icecast Admin 429 (Too Many Failed Attempts)
+If the main web dashboard reports: `can’t reach Icecast admin: /listeners/connections failed (429): too many failed attempts, try again later`, this means a client or script has hit the API with invalid credentials too many times, triggering the controller's `MAX_AUTH_FAILURES` IP lockout in `controller/src/middleware/auth.ts`.
+**Fix:** The lockout is stored in-memory. SSH into the Proxmox server and restart the controller to clear the block:
+```bash
+ssh root@192.168.68.196 'docker restart sub-wave-controller'
+```
