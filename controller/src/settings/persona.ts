@@ -205,11 +205,18 @@ function resolveShowShape(show, s) {
     // would read as "inherit" on every path, which is how the #779 blocklist
     // no-op happened.
     fadeAtShowEnd: typeof show.fadeAtShowEnd === 'boolean' ? show.fadeAtShowEnd : null,
+    // Explicit opt-in; an older persisted show keeps ordinary ducked speech.
+    pauseTalk: show.pauseTalk === true,
     // Navidrome playlist anchor: the union of these playlists becomes the show's
     // candidate pool (music/show-playlist.ts). playlistStrict makes it the show's
     // entire universe; soft just lets it dominate. Empty array = no anchor.
     playlistIds: Array.isArray(show.playlistIds) ? show.playlistIds.filter((v: unknown) => typeof v === 'string') : [],
     playlistStrict: show.playlistStrict === true,
+    // Full rotation (#1612): every anchor track airs once before any repeats.
+    // Read off the RESOLVED show by music/show-recency.ts, so omitting it here
+    // would make the switch a silent no-op on every pick path — the #779
+    // blocklist failure, exactly.
+    playlistExhaust: show.playlistExhaust === true,
     // Navidrome playlist blocklist: tracks in these playlists are hard-dropped
     // from the show's candidate pool (resolveExcludedPlaylistIds reads this off
     // the RESOLVED show, so omitting it here silently disabled the whole

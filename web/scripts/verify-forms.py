@@ -48,14 +48,19 @@ locator's OWN id (a plain field) or aria-labelledby (a group control —
 fieldAria's groupProps carries no id, see lib/form.ts).
 """
 import base64
+import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
+import wave
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -405,6 +410,37 @@ def takeover(page):
         page.wait_for_selector("text=Choose programming")
         minutes.fill("123")
         assert_survives_poll(page, minutes, "123")
+
+        # 5. "Til change" (#1601) — the window the CONTROLLER resolves from the
+        #    weekly grid rather than a duration typed here. Two things to see:
+        #    the minute box goes away (it is not what gets submitted, and a box
+        #    holding 123 beside a server-resolved window reads as if it were),
+        #    and the concrete end time is on screen BEFORE the pin, which is the
+        #    whole point of the option not being a black box.
+        page.get_by_text("til change", exact=True).click()
+        page.get_by_label("Takeover minutes").wait_for(state="detached")
+        resolved = page.wait_for_selector("text=/^ends .* min · /")
+        preview = json.loads(api("/schedule/next-change"))
+        assert preview["expiresAt"] > 0, preview
+        # Compared with a tolerance of 1, not for equality. `minutes` is
+        # round((expiresAt - now) / 60_000) with `now` taken per request, so it
+        # ticks down continuously and crosses a rounding half-point once a
+        # minute; the browser's fetch and this curl are a second or so apart, so
+        # roughly one run in sixty would straddle that point and read N vs N-1.
+        # An exact match here is a flake, not a stronger assertion.
+        shown = int(re.search(r"· (\d+) min ·", resolved.inner_text()).group(1))
+        assert abs(shown - preview["minutes"]) <= 1, (shown, preview)
+
+        page.get_by_label("Choose takeover programming").click()
+        page.get_by_role("menuitem", name="Default programming").click()
+        page.get_by_role("button", name="Take over").click()
+        page.get_by_text("autonomous music · default DJ", exact=False).wait_for()
+        stored = json.loads(api("/schedule")).get("override")
+        # The pin resolves the window again at its own startedAt, so the two
+        # answers agree on a grid boundary exactly and on a clamped one to
+        # within the seconds between the two calls.
+        assert stored and abs(stored["expiresAt"] - preview["expiresAt"]) < 10_000, (stored, preview)
+        page.get_by_role("button", name="Cancel takeover").click()
     finally:
         # Runs whether the assertions above passed or raised — a failed run
         # must not leave the fixture show behind to poison the NEXT run.
@@ -1332,6 +1368,43 @@ def onboarding(page):
 PERSONA_VERIFY_NAME = "Verify Persona"
 
 
+def preview_wav(seconds=4, sample_rate=24000):
+    """A real, browser-decodable PCM WAV served by the fake Remote endpoint."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(b"\x00\x00" * (seconds * sample_rate))
+    return buf.getvalue()
+
+
+class PreviewRemoteTtsHandler(BaseHTTPRequestHandler):
+    audio = preview_wav()
+    speak_bodies = []
+
+    def do_GET(self):
+        body = b'{"ok":true}' if self.path == "/health" else b"not found"
+        self.send_response(200 if self.path == "/health" else 404)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        size = int(self.headers.get("Content-Length", "0"))
+        body = json.loads(self.rfile.read(size) or b"{}")
+        type(self).speak_bodies.append(body)
+        self.send_response(200 if self.path == "/speak" else 404)
+        self.send_header("Content-Type", "audio/wav")
+        self.send_header("Content-Length", str(len(self.audio)))
+        self.end_headers()
+        self.wfile.write(self.audio)
+
+    def log_message(self, _format, *_args):
+        pass
+
+
 @check
 def personas(page):
     """PersonasPanel (Task 9) — the roster + system-prompt library on
@@ -1510,6 +1583,121 @@ def personas(page):
         page.unroute("**/settings", mock_tts_refusal)
 
 
+@check
+def persona_preview_rate(page):
+    """A persona preview auditions engine speed × persona speed.
+
+    The preview API accepts one final rate. This drives a real inherited Remote
+    persona through the browser, captures that request, and decodes the WAV the
+    isolated controller actually returns. Programme/daypart pacing is
+    intentionally absent: previews are stable auditions of the two saved
+    controls, while the live dispatcher applies the current programme factor.
+    """
+    before = json.loads(api("/settings"))["values"]
+    before_tts = before["tts"]
+    before_personas = before["personas"]
+    personas_for_preview = []
+    for persona in before_personas:
+        copy = json.loads(json.dumps(persona))
+        if copy.get("name") == "Wren":
+            copy["tts"]["engine"] = "inherit"
+            copy["tts"]["speed"] = 2
+        personas_for_preview.append(copy)
+
+    PreviewRemoteTtsHandler.speak_bodies = []
+    remote = ThreadingHTTPServer(("127.0.0.1", 0), PreviewRemoteTtsHandler)
+    remote_thread = threading.Thread(target=remote.serve_forever, daemon=True)
+    remote_thread.start()
+    remote_url = f"http://127.0.0.1:{remote.server_address[1]}"
+
+    try:
+        api_write("POST", "/settings", {
+            "tts": {
+                "defaultEngine": "remote",
+                "remote": {"url": remote_url},
+                "speed": {**before_tts["speed"], "remote": 0.5},
+            },
+            "personas": personas_for_preview,
+        })
+
+        def open_wren():
+            page.goto(f"{WEB}/admin/personas")
+            page.wait_for_selector("text=The voices on your station.")
+            page.get_by_role("button", name="Edit Wren").click()
+            dialog = page.get_by_role("dialog")
+            dialog.wait_for()
+            slider = dialog.get_by_label("Speech speed multiplier")
+            assert slider.is_enabled(), "inherited Remote persona speed is disabled"
+            assert slider.input_value() == "2", "persona speed did not hydrate at 2x"
+            return dialog
+
+        def assert_preview(dialog, expected_rate, min_duration, max_duration):
+            with page.expect_response(
+                lambda response: response.url.endswith("/settings/tts/preview")
+                and response.request.method == "POST"
+            ) as response_info:
+                dialog.get_by_role("button", name="Play sample").click()
+
+            response = response_info.value
+            assert response.status == 200, f"preview returned HTTP {response.status}"
+            preview_body = response.request.post_data_json
+            assert preview_body["speed"] == expected_rate, (
+                f"persona preview posted {preview_body['speed']!r}, expected {expected_rate}"
+            )
+            assert PreviewRemoteTtsHandler.speak_bodies, "fake Remote endpoint received no /speak call"
+            assert set(PreviewRemoteTtsHandler.speak_bodies[-1]) == {"text", "voice"}, (
+                "preview changed the Remote /speak wire contract"
+            )
+
+            audio = dialog.locator("audio")
+            # media-chrome keeps its slotted <audio> element visually hidden;
+            # the browser still decodes it and exposes duration metadata.
+            audio.wait_for(state="attached")
+            duration = audio.evaluate("""element => new Promise((resolve, reject) => {
+              const finish = () => Number.isFinite(element.duration)
+                ? resolve(element.duration)
+                : reject(new Error('preview duration is not finite'));
+              if (element.readyState >= 1) finish();
+              else {
+                element.addEventListener('loadedmetadata', finish, { once: true });
+                element.addEventListener('error', () => reject(new Error('preview audio failed to decode')), { once: true });
+              }
+            })""")
+            assert min_duration <= duration <= max_duration, (
+                f"preview duration {duration:.6f}s fell outside "
+                f"[{min_duration:.3f}, {max_duration:.3f}]s"
+            )
+            return preview_body["speed"], duration
+
+        # Saved 0.5x engine × 2x persona composes to unity, preserving all four
+        # seconds of the endpoint's WAV.
+        unity_rate, unity_duration = assert_preview(open_wren(), 1, 3.95, 4.05)
+
+        # Exercise the actual non-unity Remote path too: 0.75x × 2x = 1.5x,
+        # so the same 4s source decodes to about 2.667s in the browser.
+        api_write("POST", "/settings", {
+            "tts": {"speed": {**before_tts["speed"], "remote": 0.75}},
+        })
+        shaped_rate, shaped_duration = assert_preview(open_wren(), 1.5, 2.62, 2.72)
+        print(
+            "  persona preview evidence: "
+            f"posted {unity_rate}x -> {unity_duration:.6f}s; "
+            f"posted {shaped_rate}x -> {shaped_duration:.6f}s"
+        )
+    finally:
+        remote.shutdown()
+        remote.server_close()
+        remote_thread.join(timeout=5)
+        api_write("POST", "/settings", {
+            "tts": {
+                "defaultEngine": before_tts["defaultEngine"],
+                "remote": before_tts["remote"],
+                "speed": before_tts["speed"],
+            },
+            "personas": before_personas,
+        })
+
+
 SHOW_VERIFY_NAME = "Verify Show"
 GHOST_SHOW_NAME = "Verify Ghost Show"
 
@@ -1676,10 +1864,10 @@ def shows(page):
     finally:
         page.unroute("**/settings", mock_settings_get)
 
-    # 2 & 3, and the final valid save — one continuous "Add show" session,
+    # 2, 3 & 4, and the final valid save — one continuous "Add show" session,
     # against the REAL (unmocked) controller. Wrapped in try/finally like
     # skills()/blockrules()/imaging()/personas() — a real, persisted show is
-    # created in step 4 below, and a run that fails partway through must not
+    # created in step 5 below, and a run that fails partway through must not
     # leave it behind to poison the next run.
     try:
         page.goto(f"{WEB}/admin/shows")
@@ -1744,11 +1932,68 @@ def shows(page):
 
         assert not save.is_disabled(), "Save show stayed disabled once the overlap was fixed"
 
-        # 4. Save — a genuinely valid show persists through a real POST /shows
+        # 4. Eras — a custom window beside a decade chip (#1599). Both year
+        #    boxes sit INSIDE the eras group (fieldAria's groupProps carries no
+        #    id), so they are found by their own aria-label and every assertion
+        #    stays scoped to the group, per this file's one convention.
+        eras_group = dialog.locator('[aria-labelledby$=".eras-label"]')
+        eras_group.wait_for()
+        eras_group.get_by_role("button", name="90s").click()
+
+        era_from = dialog.get_by_label("custom era start year")
+        era_to = dialog.get_by_label("custom era end year")
+        add_range = dialog.get_by_role("button", name="Add range")
+
+        # A range spelling out a decade already lit is refused rather than
+        # stacked beside its chip — the duplicate the schema would drop anyway.
+        era_from.fill("1990")
+        era_to.fill("1999")
+        add_range.click()
+        assert "already selected" in eras_group.get_by_role("alert").inner_text(), \
+            "adding a range equal to a lit decade chip was not refused"
+
+        # The window the chips cannot spell: one year.
+        era_from.fill("2026")
+        era_to.fill("2026")
+        add_range.click()
+        eras_group.get_by_role("button", name="2026–2026").wait_for()
+
+        # The OPEN-ENDED window — one bound left blank, which is a legal filter
+        # and the only shape eraLabelOf renders through its no-toYear branch.
+        # Driven separately because a closed range proves nothing about it: the
+        # blank side has to survive parse() as null rather than as a refusal.
+        era_from.fill("2030")
+        era_to.fill("")
+        add_range.click()
+        eras_group.get_by_role("button", name="2030+").wait_for()
+
+        # Acceptance criterion 2 of #1599 — toggling a decade chip must not
+        # disturb the custom windows sharing the array with it. Wait on the
+        # chip's own aria-pressed before counting, so the assertion reads
+        # settled state rather than racing the re-render.
+        eras_group.get_by_role("button", name="90s").click()
+        eras_group.get_by_role("button", name="90s", pressed=False).wait_for()
+        for label in ("2026–2026", "2030+"):
+            assert eras_group.get_by_role("button", name=label).count() == 1, \
+                f"untoggling a decade chip dropped the custom era window {label}"
+
+        # Re-light it for the save below. It lands at the END of the array now:
+        # untoggling REMOVED that window and toggling APPENDS a fresh one, which
+        # is exactly why the assertion spells the order out rather than sorting.
+        eras_group.get_by_role("button", name="90s").click()
+        eras_group.get_by_role("button", name="90s", pressed=True).wait_for()
+
+        # 5. Save — a genuinely valid show persists through a real POST /shows
         #    round trip.
         save.click()
         dialog.wait_for(state="detached")
-        assert SHOW_VERIFY_NAME in api("/settings"), "new show did not persist"
+        saved = find_show(SHOW_VERIFY_NAME)
+        assert saved, "new show did not persist"
+        assert saved.get("eras") == [
+            {"fromYear": 2026, "toYear": 2026},
+            {"fromYear": 2030, "toYear": None},
+            {"fromYear": 1990, "toYear": 1999},
+        ], f"chip + custom era windows did not all persist: {saved.get('eras')!r}"
     finally:
         # Runs whether the assertions above passed or raised — a failed run
         # must not leave "Verify Show" behind to poison the NEXT run, and a

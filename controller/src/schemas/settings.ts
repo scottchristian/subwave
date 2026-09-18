@@ -291,6 +291,29 @@ export function settingsRawStringLike(max: number, message: string) {
  */
 export const STREAM_COUNTRY_HEADER_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
 
+/**
+ * `llm.headers` / `llm.fallback.headers` — extra request headers the
+ * openai-compatible transport sends on every call (#1618).
+ *
+ * The NAME grammar is `STREAM_COUNTRY_HEADER_RE`, not a second copy of it:
+ * both fields are naming an HTTP header and the rule is the same RFC 7230
+ * token, so this is an alias for the same reason `settings/vocab.ts`'s `ID_RE`
+ * aliases `SHOW_ID_RE`. The VALUE grammar is printable ASCII on one line — a
+ * header value is latin-1 on the wire, and a CR/LF in one is header injection
+ * rather than a typo, so it is REFUSED rather than repaired.
+ *
+ * They live here for the same reason the country header's rule does: the admin
+ * form runs the mirrored copy so a bad header name is caught before the save,
+ * and the save path (`applyLlmLegPatch`) and the lenient load path
+ * (`normalizeLlmHeaders`) import them rather than each restating the rule.
+ */
+export const LLM_HEADER_NAME_RE = STREAM_COUNTRY_HEADER_RE;
+export const LLM_HEADER_VALUE_RE = /^[\x20-\x7E]+$/;
+
+/** At most this many custom headers per leg, and this long a value. */
+export const LLM_HEADERS_MAX = 10;
+export const LLM_HEADER_VALUE_MAX = 500;
+
 /** Path length cap for `stream.geoipDbPath` — a generous PATH_MAX. */
 export const STREAM_GEOIP_DB_PATH_MAX = 512;
 
@@ -473,6 +496,28 @@ export const jingleRatioSchema = settingsIntLike(
   JINGLE_RATIO_BOUNDS,
   `jingleRatio must be int in [${JINGLE_RATIO_BOUNDS.min}, ${JINGLE_RATIO_BOUNDS.max}]`,
 );
+
+/**
+ * WHO counts the tracks between jingles (#1619).
+ *
+ * `'mixer'` is the pre-existing station: radio.liq's own
+ * `rotate(weights=[1, jingle_ratio()])` draws a stinger every N tracks and the
+ * controller only learns about it afterwards, through `jingle-playing.json`.
+ * `'controller'` moves the count into the talk-slot planner, so a jingle is a
+ * row like every other thing that takes the listener's ear — and the mixer's
+ * ratio handoff file is written 0, which is already the documented way to
+ * switch its rotate off (#997).
+ *
+ * Strict, like the two switches above and for the same reason: the key is new,
+ * so there is no hand-rolled branch to inherit leniency from. `load()` still
+ * coerces an unrecognised value in a hand-edited settings.json back to
+ * `'mixer'`, so only a PATCH is refused.
+ */
+export const JINGLE_ROTATE_OWNERS = ['mixer', 'controller'] as const;
+export type JingleRotateOwner = (typeof JINGLE_ROTATE_OWNERS)[number];
+export const jingleRotateSchema = z.enum(JINGLE_ROTATE_OWNERS, {
+  error: `jingleRotate must be one of ${JINGLE_ROTATE_OWNERS.join(', ')}`,
+});
 
 export const sfxPatchSchema = settingsBlockOf({
   enabled: settingsBoolLike(),
@@ -789,6 +834,47 @@ export const djSpeakClockSchema = z.boolean({
  */
 export const djTalkOnlyBetweenTracksSchema = z.boolean({
   error: 'djTalkOnlyBetweenTracks must be a boolean',
+});
+
+// The floor a rendered skill segment must clear before an opted-in show gives
+// it a real gap instead of a duck. settingsIntLike, like every other numeric
+// settings key: it accepts the admin form's string and truncates a float rather
+// than refusing either, and its message names the field in house style instead
+// of leaking zod's own wording.
+export const PAUSE_TALK_MIN_SECONDS_BOUNDS: SettingsNumericBound = { min: 5, max: 90 };
+export const pauseTalkMinSecondsSchema = settingsIntLike(
+  PAUSE_TALK_MIN_SECONDS_BOUNDS,
+  'pauseTalkMinSeconds must be a whole number of seconds between 5 and 90',
+);
+
+// The prompt-memory recap injected into every DJ script. The four-hour session
+// roll is the hard ceiling on useful history, and the line/character caps keep
+// an operator typo from consuming the model's whole context window.
+export const DJ_RECAP_LIMIT_BOUNDS: SettingsNumericBound = { min: 1, max: 50 };
+export const DJ_RECAP_MINUTES_BOUNDS: SettingsNumericBound = { min: 1, max: 240 };
+export const DJ_RECAP_CHARS_BOUNDS: SettingsNumericBound = { min: 40, max: 1000 };
+
+// DJ policy controls are grouped so future speaking/transition behaviour has
+// one stable home in Settings. A missing block remains the pre-existing off.
+export const djBehaviourPatchSchema = settingsBlockOf({
+  showWelcome: z.boolean({ error: 'djBehaviour.showWelcome must be a boolean' }),
+  sameHostAcknowledgement: z.boolean({ error: 'djBehaviour.sameHostAcknowledgement must be a boolean' }),
+  extendedSleeveNotes: z.boolean({ error: 'djBehaviour.extendedSleeveNotes must be a boolean' }),
+  releaseYearMentions: z.enum(['regular', 'occasional', 'rare'], {
+    error: 'djBehaviour.releaseYearMentions must be regular, occasional or rare',
+  }),
+  recapLimit: settingsIntLike(
+    DJ_RECAP_LIMIT_BOUNDS,
+    'djBehaviour.recapLimit must be a whole number between 1 and 50',
+  ),
+  recapMinutes: settingsIntLike(
+    DJ_RECAP_MINUTES_BOUNDS,
+    'djBehaviour.recapMinutes must be a whole number of minutes between 1 and 240',
+  ),
+  recapChars: settingsIntLike(
+    DJ_RECAP_CHARS_BOUNDS,
+    'djBehaviour.recapChars must be a whole number between 40 and 1000',
+  ),
 });
 
 /**

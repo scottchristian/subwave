@@ -68,6 +68,7 @@ import {
   coerceGuestPersonaIds,
   isDefaultTakeover,
   mintId,
+  normalizeLlmHeaders,
   normalizeLlmKeys,
   normalizeLlmProviderBaseUrls,
   normalizeMoodMap,
@@ -92,6 +93,10 @@ import {
 import { validateCompatParams } from './settings/compat-params.js';
 import { parseSettingsPatchKey } from './settings/patch-registry.js';
 import {
+  DJ_RECAP_CHARS_BOUNDS,
+  DJ_RECAP_LIMIT_BOUNDS,
+  DJ_RECAP_MINUTES_BOUNDS,
+  PAUSE_TALK_MIN_SECONDS_BOUNDS,
   PICKER_ALBUM_HOURS_BOUNDS,
   STREAM_BUFFER_SECONDS_BOUNDS,
   STREAM_COUNTRY_HEADER_RE,
@@ -99,7 +104,9 @@ import {
   STREAM_MAX_LISTENERS_BOUNDS,
   maxTrackSecondsValueSchema,
   type ScheduledBackupSettings,
+  type JingleRotateOwner,
 } from './schemas/settings.js';
+import { jingleRotateOwner, setJingleRotateOwner } from './broadcast/jingle-rotate.js';
 import { minTrackSeconds, peek, setCache } from './settings/store.js';
 import {
   SKILL_RENAMES,
@@ -188,8 +195,10 @@ export {
   WEATHER_MOOD_DEFAULTS,
   clampMaxOutputTokens,
   clampDiscoverySteps,
+  clampEffectiveTtsSpeed,
   clampTtsGain,
   clampTtsSpeed,
+  composeTtsControlSpeeds,
   coerceShowVocals,
   normalizeDial,
   normalizeTtsCorrections,
@@ -202,6 +211,7 @@ export {
   getRedacted,
   llmKeyFor,
   minTrackSeconds,
+  onCacheChange,
   moodEntries,
   moodPromptFor,
   moodScheduleFor,
@@ -291,6 +301,18 @@ const intIn = (v: unknown, def: number, min: number, max: number) => {
   }
   const n = Number(v);
   return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.round(n))) : def;
+};
+
+// `settingsIntLike` is parseInt-based on the strict save path. Keep the cold
+// load in the same numeric family, but repair a hand-edited out-of-range value
+// to the nearest bound instead of ever wedging controller startup.
+const parsedIntIn = (
+  v: unknown,
+  def: number,
+  bounds: { min: number; max: number },
+) => {
+  const n = parseInt(v as string, 10);
+  return Number.isFinite(n) ? Math.min(bounds.max, Math.max(bounds.min, n)) : def;
 };
 
 export async function load() {
@@ -402,6 +424,10 @@ export async function load() {
 
   const loaded: any = {
     jingleRatio: stored.jingleRatio ?? DEFAULTS.jingleRatio,
+    // Repaired, never trusted: a hand-edited settings.json is load()'s input
+    // and an unrecognised owner here would decide whether TWO rotates run.
+    // Anything but the explicit opt-in reads as the mixer (#1619).
+    jingleRotate: jingleRotateOwner(stored),
     crossfadeDuration: stored.crossfadeDuration ?? DEFAULTS.crossfadeDuration,
     // Bounded here as well as at the save path: a hand-edited settings.json is
     // load()'s input, so it repairs rather than throws — and an out-of-range `p`
@@ -571,6 +597,42 @@ export async function load() {
       typeof stored.djTalkOnlyBetweenTracks === 'boolean'
         ? stored.djTalkOnlyBetweenTracks
         : DEFAULTS.djTalkOnlyBetweenTracks,
+    // parseInt + clamp, matching pauseTalkMinSecondsSchema's posture on the save
+    // path: a read that repaired differently from the writer would refuse a
+    // value it had just stored.
+    pauseTalkMinSeconds: Number.isFinite(parseInt(stored.pauseTalkMinSeconds, 10))
+      ? Math.min(
+          PAUSE_TALK_MIN_SECONDS_BOUNDS.max,
+          Math.max(PAUSE_TALK_MIN_SECONDS_BOUNDS.min, parseInt(stored.pauseTalkMinSeconds, 10)),
+        )
+      : DEFAULTS.pauseTalkMinSeconds,
+    djBehaviour: {
+      showWelcome: typeof stored.djBehaviour?.showWelcome === 'boolean'
+        ? stored.djBehaviour.showWelcome
+        : DEFAULTS.djBehaviour.showWelcome,
+      sameHostAcknowledgement: typeof stored.djBehaviour?.sameHostAcknowledgement === 'boolean'
+        ? stored.djBehaviour.sameHostAcknowledgement
+        : DEFAULTS.djBehaviour.sameHostAcknowledgement,
+      extendedSleeveNotes: typeof stored.djBehaviour?.extendedSleeveNotes === 'boolean'
+        ? stored.djBehaviour.extendedSleeveNotes : DEFAULTS.djBehaviour.extendedSleeveNotes,
+      releaseYearMentions: ['regular', 'occasional', 'rare'].includes(stored.djBehaviour?.releaseYearMentions)
+        ? stored.djBehaviour.releaseYearMentions : DEFAULTS.djBehaviour.releaseYearMentions,
+      recapLimit: parsedIntIn(
+        stored.djBehaviour?.recapLimit,
+        DEFAULTS.djBehaviour.recapLimit,
+        DJ_RECAP_LIMIT_BOUNDS,
+      ),
+      recapMinutes: parsedIntIn(
+        stored.djBehaviour?.recapMinutes,
+        DEFAULTS.djBehaviour.recapMinutes,
+        DJ_RECAP_MINUTES_BOUNDS,
+      ),
+      recapChars: parsedIntIn(
+        stored.djBehaviour?.recapChars,
+        DEFAULTS.djBehaviour.recapChars,
+        DJ_RECAP_CHARS_BOUNDS,
+      ),
+    },
     // Repaired rather than refused, like ducking above: an offset the talk
     // table's programme row cannot sample is a sign-off that never airs, and a
     // hand-edited settings.json is this path's input.
@@ -868,6 +930,13 @@ export async function load() {
       providerBaseUrls: llmBaseUrls,
       baseUrl: llmBaseUrls[llmProvider]
         ?? (typeof stored.llm?.baseUrl === 'string' ? stored.llm.baseUrl.trim() : DEFAULTS.llm.baseUrl),
+      // Extra openai-compatible request headers (#1618). Malformed entries are
+      // dropped rather than throwing — this block does NOT spread DEFAULTS, so
+      // a field missing HERE saves fine and then vanishes on the next cold
+      // load; see repeatPenalty below for what that failure looks like. A
+      // settings.json written before the field existed loads as {}, which sends
+      // no extra headers at all.
+      headers: normalizeLlmHeaders(stored.llm?.headers),
       reasoning:
         typeof stored.llm?.reasoning === 'boolean' ? stored.llm.reasoning : DEFAULTS.llm.reasoning,
       // Only 'auto' downgrades the forced tool_choice; anything else (incl. a
@@ -944,6 +1013,7 @@ export async function load() {
           providerBaseUrls: fbBaseUrls,
           baseUrl: fbBaseUrls[fbProvider]
             ?? (typeof fb.baseUrl === 'string' ? fb.baseUrl.trim() : DEFAULTS.llm.fallback.baseUrl),
+          headers: normalizeLlmHeaders(fb.headers),
           reasoning:
             typeof fb.reasoning === 'boolean' ? fb.reasoning : DEFAULTS.llm.fallback.reasoning,
           toolChoice: fb.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.fallback.toolChoice,
@@ -1194,6 +1264,10 @@ export async function load() {
     console.warn(`[settings] ignoring invalid timezone "${stored.timezone.trim()}" — using Auto (container TZ)`);
   }
   setStationTimezone(loaded.timezone);
+  // Same shape, same reason (#1619): the queue subscribes to a real ownership
+  // change so it can restart the rotate's boundary count, and it cannot be
+  // called from here directly without closing a settings ↔ queue cycle.
+  setJingleRotateOwner(loaded.jingleRotate);
   return loaded;
 }
 
@@ -1212,6 +1286,19 @@ export async function update(patch) {
     const v = parseSettingsPatchKey<number>('jingleRatio', patch.jingleRatio);
     if (v !== cur.jingleRatio) {
       next.jingleRatio = v;
+      restart = true;
+    }
+  }
+  // Who counts the tracks (#1619). Same restart flag as the ratio itself and
+  // for the same reason: this key's whole effect on the mixer is the value
+  // written into liquidsoap_jingle_ratio.txt, which is read once at startup.
+  // Until that restart the mixer is still rotating on its old ratio, so an
+  // operator who flips this and walks away hears both — which is what the
+  // control's "needs restart" wording is for.
+  if ('jingleRotate' in patch) {
+    const v = parseSettingsPatchKey<JingleRotateOwner>('jingleRotate', patch.jingleRotate);
+    if (v !== cur.jingleRotate) {
+      next.jingleRotate = v;
       restart = true;
     }
   }
@@ -1506,6 +1593,31 @@ export async function update(patch) {
   if ('djTalkOnlyBetweenTracks' in patch) {
     next.djTalkOnlyBetweenTracks =
       parseSettingsPatchKey<boolean>('djTalkOnlyBetweenTracks', patch.djTalkOnlyBetweenTracks);
+  }
+  if ('pauseTalkMinSeconds' in patch) {
+    next.pauseTalkMinSeconds = parseSettingsPatchKey<number>('pauseTalkMinSeconds', patch.pauseTalkMinSeconds);
+  }
+  if ('djBehaviour' in patch) {
+    const behaviour = parseSettingsPatchKey<{
+      showWelcome?: boolean;
+      sameHostAcknowledgement?: boolean;
+      extendedSleeveNotes?: boolean;
+      releaseYearMentions?: string;
+      recapLimit?: number;
+      recapMinutes?: number;
+      recapChars?: number;
+    }>(
+      'djBehaviour', patch.djBehaviour,
+    );
+    for (const key of ['showWelcome', 'sameHostAcknowledgement', 'extendedSleeveNotes'] as const) {
+      if (behaviour[key] !== undefined) next.djBehaviour[key] = behaviour[key];
+    }
+    if (behaviour.releaseYearMentions !== undefined) {
+      next.djBehaviour.releaseYearMentions = behaviour.releaseYearMentions as typeof next.djBehaviour.releaseYearMentions;
+    }
+    for (const key of ['recapLimit', 'recapMinutes', 'recapChars'] as const) {
+      if (behaviour[key] !== undefined) next.djBehaviour[key] = behaviour[key];
+    }
   }
   if ('handover' in patch) {
     // No mixer restart: the offset is read live by broadcast/handover-policy.ts
@@ -2351,6 +2463,10 @@ export async function update(patch) {
   // Applied-on-save, same pattern as the liquidsoap_*.txt files below —
   // minus the restart: the next zonedParts() call picks it up.
   setStationTimezone(next.timezone);
+  // Applied-on-save too, and unlike the zone this one DOES also need the mixer
+  // restart the flag above raises — the counter reset is only the controller's
+  // half (#1619).
+  setJingleRotateOwner(next.jingleRotate);
   // shows + schedule are persisted to their own file (schedule.json); strip
   // them from the settings.json payload so legacy installs migrate forward
   // on the first write. The in-memory `cache` keeps the full shape so

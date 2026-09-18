@@ -18,6 +18,7 @@ import {
   JINGLE_RATIO_BOUNDS,
   LOUDNESS_MAX_BOOST_DB_BOUNDS,
   LOUDNESS_TARGET_LUFS_BOUNDS,
+  type JingleRotateOwner,
 } from '../schemas/settings.js';
 import { SHOW_MAX_TRACK_SECONDS, SHOW_MIN_TRACK_LENGTH_MAX } from '../schemas/show.js';
 import { DEFAULT_THEME_ID } from '../themes.js';
@@ -37,6 +38,14 @@ import {
 
 export const DEFAULTS = {
   jingleRatio: 30, // 1 jingle per N music tracks
+  // WHO counts those tracks (#1619). 'mixer' is the pre-existing station —
+  // radio.liq's own rotate draws the stinger and the controller finds out
+  // afterwards. 'controller' moves the count into the talk-slot planner and
+  // writes the mixer's ratio handoff as 0. Default 'mixer' so an upgrade is
+  // byte-identical; see broadcast/jingle-rotate.ts for why this is opt-in
+  // rather than the only mode. Needs a mixer restart either way — the ratio
+  // file is read once at startup.
+  jingleRotate: 'mixer' as JingleRotateOwner,
   crossfadeDuration: 10.0, // seconds
   // How far the music drops under each spoken layer — `smooth_add`'s `p`, so
   // the number is what is LEFT UP, not the cut: 0.22 is ~-13 dB, 0.30 is ~-10.
@@ -231,6 +240,22 @@ export const DEFAULTS = {
   // bound it. Policy lives in exactly one place — broadcast/talk-air.ts.
   // Applies live; no restart.
   djTalkOnlyBetweenTracks: false,
+  // Show opt-in only; clips shorter than this remain ordinary ducked speech.
+  pauseTalkMinSeconds: 20,
+  // Optional programme-opening line folded into the first hourly check after a
+  // scheduled show change. Off preserves the established terse time check.
+  djBehaviour: {
+    showWelcome: false,
+    sameHostAcknowledgement: false,
+    extendedSleeveNotes: false,
+    releaseYearMentions: 'regular',
+    // Compact anti-repeat material carried into every DJ script prompt. These
+    // are deliberately ordinary live settings rather than boot environment:
+    // operators tune editorial behaviour from Admin → DJ behaviour.
+    recapLimit: 10,
+    recapMinutes: 120,
+    recapChars: 140,
+  },
   // Show handover timing (#1576). How many station-clock minutes BEFORE a show
   // boundary the outgoing host signs off — the programme outro beat's window.
   // 5 is exactly where the beat has always fired (:55 of the final hour), so an
@@ -242,9 +267,9 @@ export const DEFAULTS = {
   // cannot land on is a sign-off that never airs. Enforced at the save path and
   // repaired at load.
   //
-  // The ORDERING half of the handover carries no dial: whatever the offset, the
-  // incoming host waits for one closing track rather than following the
-  // sign-off straight onto the air (broadcast/handover-policy.ts).
+  // The ORDERING half of the handover carries no dial: the final outgoing track
+  // owns the complete sign-off/greeting pair, while between-tracks placement
+  // holds that pair for the first eligible seam at the boundary.
   handover: { offsetMinutes: 5 },
   // One persona is active at a time; a scheduled show can override who is on air.
   personas: SEED_PERSONAS,
@@ -334,9 +359,9 @@ export const DEFAULTS = {
     // level the loudness gap between engines. Stacks with each persona's own
     // tts.gainDb. See TTS_GAIN_CLAMP_DB and audio/tts.ts:voiceGainDb().
     gainDb: { piper: 0, kokoro: 0, chatterbox: 0, 'pocket-tts': 0, cloud: 0, remote: 0 },
-    // Per-engine speech-rate multiplier (0.5–2.0x), composed on top of the
-    // daypart energy and each persona's tts.speed. Only piper/kokoro/cloud honour
-    // it — the other entries are inert. See clampTtsSpeed().
+    // Per-engine speech-rate multiplier (0.5–2.0x), composed with each
+    // persona's tts.speed and, on air, programme pacing. Piper, Kokoro, Cloud
+    // and Remote honour it; Chatterbox/PocketTTS leave it inert.
     speed: { piper: 1, kokoro: 1, chatterbox: 1, 'pocket-tts': 1, cloud: 1, remote: 1 },
     // Find→replace pairs applied to every booth-bound line before any engine sees
     // it (audio/speech-text.ts), e.g. { from: 'GHz', to: 'gigahertz' }.
@@ -361,6 +386,12 @@ export const DEFAULTS = {
     // load()/applyLlmLegPatch() and kept only as a migration source.
     providerBaseUrls: {} as Record<string, string>,
     baseUrl: '',
+    // Extra request headers sent on every openai-compatible / locca call (#1618).
+    // Empty by default, so an untouched station sends exactly what it did before
+    // the field existed. For gateways that route on a header rather than the
+    // bearer token alone (OpenCode Zen Go's `x-opencode-session` is the case
+    // this was filed for). Ignored by every other provider.
+    headers: {} as Record<string, string>,
     // Let reasoning models emit a chain-of-thought. Off by default: the DJ writes
     // short scripts and structured picks that don't benefit from it, and an
     // uncapped <think> block on a small model balloons every call.
@@ -468,6 +499,9 @@ export const DEFAULTS = {
       ollamaUrl: '',
       providerBaseUrls: {} as Record<string, string>,
       baseUrl: '',
+      // Per-leg like providerBaseUrls: the backup may be a different gateway
+      // with its own routing header.
+      headers: {} as Record<string, string>,
       reasoning: false,
       toolChoice: 'required',
       numCtx: 16384,
@@ -560,7 +594,9 @@ export const DEFAULTS = {
     // Keep the Demucs stems the analysis pass already computes (head + tail
     // windows) as FLAC under state/stems/<id>/, so a transition render is a fast
     // mix instead of a fresh separation. Needs the demucs stack like
-    // vocalActivity; ~13-25 MB per track (#1257), LRU-swept to stemCacheGb.
+    // vocalActivity; ~13-25 MB per track (#1257), swept to stemCacheGb by the
+    // music/stem-priority.ts ranking (lowest value out first, mtime to break
+    // ties) — the same order the backfill scans in.
     stemCache: false,
     stemCacheGb: 15,
     // Pause the analysis pass while anyone is listening, resuming once the stream

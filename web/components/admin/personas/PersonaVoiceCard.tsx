@@ -2,15 +2,10 @@
 // The engine picker and every engine's voice selector live in the shared
 // tts/EngineVoiceFields, which the station-wide TTS fallback slot uses too.
 //
-// `tts` is bound as ONE `useController` over the whole {engine, cloudProvider,
-// voice, gainDb, speed} object rather than a SelectField per subfield, for two
-// independent reasons. (1) EngineVoiceFields does real cross-field work on
-// change — switching engine resets `voice` to one the new engine accepts —
-// which needs a callback over the whole slot, not SelectField's hardcoded
-// `onValueChange={field.onChange}`. (2) The controller's fieldErrors here are
-// block-level too: `ttsVoiceSlotSchema` is one `.transform()` over the slot and
-// its issues carry no explicit path, so a bad engine/voice combination comes
-// back keyed at `personas.<i>.tts` and never at `.tts.voice`.
+// `tts` is bound as ONE useController over the whole slot, not a SelectField
+// per subfield: switching engine resets `voice` (cross-field work SelectField
+// can't express), and the controller's fieldErrors are block-level too — a bad
+// engine/voice combination comes back keyed at `personas.<i>.tts`.
 import { useId } from 'react';
 import { useController, type Control } from 'react-hook-form';
 import type { Persona, PersonasFormValues, SettingsResponse } from './types';
@@ -23,6 +18,7 @@ import { effectiveTts } from './helpers';
 import { Label } from '../../ui/label';
 import { VoiceMeter } from './VoiceMeter';
 import { cn } from '../../../lib/cn';
+import { composeTtsControlSpeeds } from '../../../lib/schemas.generated';
 
 interface PersonaVoiceCardProps {
   persona: Persona; // read-only: language (preview) + on-screen labels only
@@ -48,15 +44,19 @@ export function PersonaVoiceCard({
     : `${gain > 0 ? '+' : '−'}${Math.abs(gain).toFixed(1)} dB`;
 
   const speed = tts.speed ?? 1;
-  // Only Piper/Kokoro/cloud honour speed; the other workers ignore it, so the
-  // control is shown but disabled with a hint. Asked of the RESOLVED engine: a
-  // persona on the station default has no engine of its own, and reading the
-  // raw slot offered a live speed dial that whatever the station is set to may
-  // quietly ignore.
+  // Chatterbox/PocketTTS do not honour speed, so the control is shown but
+  // disabled there. Asked of the RESOLVED engine: a persona on the station
+  // default has no engine of its own.
   const resolved = effectiveTts({ tts }, data);
   const resolvedEngine = resolved?.engine;
   const speedSupported =
-    resolvedEngine !== 'chatterbox' && resolvedEngine !== 'pocket-tts' && resolvedEngine !== 'remote';
+    resolvedEngine !== 'chatterbox' && resolvedEngine !== 'pocket-tts';
+  // Previews are deterministic auditions of the two saved controls. The live
+  // dispatcher adds the current daypart/show factor later, at air time.
+  const previewSpeed = composeTtsControlSpeeds(
+    resolvedEngine ? data?.values?.tts?.speed?.[resolvedEngine] : undefined,
+    speed,
+  );
 
   return (
     <Card flat title="Voice" sub="text-to-speech engine">
@@ -73,7 +73,7 @@ export function PersonaVoiceCard({
             onChange={patch => field.onChange({ ...tts, ...patch })}
             data={data}
             adminFetch={adminFetch}
-            previewSpeed={tts.speed}
+            previewSpeed={previewSpeed}
             previewLanguage={persona.language}
             cloudIssue={cloudIssueText && (
               <>
@@ -99,7 +99,8 @@ export function PersonaVoiceCard({
                     from this persona, so there is no voice to set here. Switch the
                     station to Piper or Kokoro, or pin an engine above, to give
                     this persona a voice of its own.</>}{' '}
-              The sample below plays what will actually air.
+              The sample below combines the saved station and persona speeds;
+              the current programme can shape delivery further on air.
             </>}
             unavailableNote={engine => (
               <>{ENGINE_UNAVAILABLE[engine]} This persona falls back to{' '}
@@ -107,8 +108,8 @@ export function PersonaVoiceCard({
             )}
             previewHint={<>
               Plays a short sample in this persona&apos;s voice, and language
-              when one is set. Reflects the voice and speed; the dB trim is
-              applied later, on air.
+              when one is set. It combines the saved engine and persona speeds;
+              programme pacing and the dB trim are applied later, on air.
             </>}
           />
           <FieldError
@@ -162,8 +163,10 @@ export function PersonaVoiceCard({
             </div>
             <div className="field-hint">
               {speedSupported
-                ? <>Slow down or speed up this persona on top of the engine pace. <code>1.00×</code> = no change.</>
-                : <>Not supported by this engine; only Piper, Kokoro and cloud honour speed.</>}
+                ? resolvedEngine === 'remote'
+                  ? <>Slow down or speed up this persona on top of the engine pace. <code>1.00×</code> = no change. Remote applies the composed preview rate locally with ffmpeg when available; the current programme may shape it further on air. Without ffmpeg, it uses the original audio.</>
+                  : <>Slow down or speed up this persona on top of the engine pace. <code>1.00×</code> = no change.</>
+                : <>Not supported by this engine; Piper, Kokoro, cloud and Remote honour speed.</>}
             </div>
           </div>
         </div>
