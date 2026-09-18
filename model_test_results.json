@@ -1,0 +1,318 @@
+{
+  "results": [
+    {
+      "model": "openrouter/google/gemma-4-31b-it:free",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "openrouter/google/gemma-4-26b-a4b-it:free",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "nvidia/minimaxai/minimax-m2.7",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "nvidia/z-ai/glm-5.2",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "nvidia/deepseek-ai/deepseek-v4-pro",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "nvidia/deepseek-ai/deepseek-v4-flash",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "nvidia/moonshotai/kimi-k2.6",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+      "status": "error",
+      "reason": "Extra data: line 3 column 1558 (char 1568)"
+    },
+    {
+      "model": "nvidia/nemotron-3-ultra-550b-a55b",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "nvidia/parakeet-ctc-1.1b-asr",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "gemini/gemini-3.7-flash",
+      "status": "error",
+      "reason": "Expecting value: line 1 column 1 (char 0)"
+    },
+    {
+      "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+      "status": "error",
+      "reason": "Extra data: line 5 column 1543 (char 1564)"
+    },
+    {
+      "model": "gemini/gemini-3.5-flash-lite",
+      "status": "error",
+      "reason": "Expecting value: line 1 column 1 (char 0)"
+    },
+    {
+      "model": "gemini/gemini-3.6-flash",
+      "status": "error",
+      "reason": "Expecting value: line 1 column 1 (char 0)"
+    },
+    {
+      "model": "gemini/gemini-3.8-flash",
+      "status": "error",
+      "reason": "Expecting value: line 1 column 1 (char 0)"
+    },
+    {
+      "model": "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "status": "error",
+      "reason": "Extra data: line 7 column 3915 (char 3947)"
+    },
+    {
+      "model": "gemini/gemini-3-flash-preview",
+      "status": "error",
+      "reason": "Expecting value: line 1 column 1 (char 0)"
+    },
+    {
+      "model": "gemini/gemini-3.1-flash-lite-preview",
+      "status": "error",
+      "reason": "Expecting value: line 1 column 1 (char 0)"
+    },
+    {
+      "model": "Free_Shit",
+      "status": "error",
+      "reason": "Extra data: line 1 column 945 (char 944)"
+    },
+    {
+      "model": "gemini/gemini-3.1-pro-preview",
+      "status": "error",
+      "reason": "Expecting value: line 1 column 1 (char 0)"
+    },
+    {
+      "model": "cf/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "cf/@cf/mistralai/mistral-small-3.1-24b-instruct",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "cf/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "cf/@cf/meta/llama-3.1-70b-instruct-fp8-fast",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "cf/@cf/zai-org/glm-4.7-flash",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "cf/@cf/qwen/qwq-32b",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "gemini/gemma-4-31b-it",
+      "status": "error",
+      "reason": "Expecting value: line 1 column 1 (char 0)"
+    },
+    {
+      "model": "cf/@cf/qwen/qwen2.5-coder-32b-instruct",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "ollama/gpt-oss:120b",
+      "status": "error",
+      "reason": "Expecting value: line 1 column 1 (char 0)"
+    },
+    {
+      "model": "ollama/minimax-m2.5",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "ollama/kimi-k2.5",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "ollama/glm-5",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "ollama/glm-4.7-flash",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "ollama/minimax-m3",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "ollama/qwen3.5",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "cf/@cf/moonshotai/kimi-k2.5",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "cf/@cf/moonshotai/kimi-k2.6",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "kgw/nvidia/nemotron-3-super-120b-a12b:free",
+      "status": "error",
+      "reason": "Extra data: line 1 column 186 (char 185)"
+    },
+    {
+      "model": "kgw/kilo-auto/frontier",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "kgw/kwaipilot/kat-coder-pro-v2.5:free",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "ps/laguna-s-2.1",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "ps/laguna-xs-2.1",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "kgw/kilo-auto/free",
+      "status": "error",
+      "reason": "Extra data: line 1 column 1507 (char 1506)"
+    },
+    {
+      "model": "kimchi/kimi-k2.7",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "kimchi/nemotron-3-ultra-fp4",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "kgw/kilo-auto/balanced",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "kimchi/glm-5.3-flash",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "kimchi/glm-5.3",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "kimchi/minimax-m3",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "kimchi/kimi-k3",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "kimchi/deepseek-v4-flash-0731",
+      "status": "error",
+      "reason": "503 Server Error: Service Unavailable for url: http://192.168.68.193:20128/v1/chat/completions"
+    },
+    {
+      "model": "kgw/nvidia/nemotron-3-ultra-550b-a55b:free",
+      "status": "error",
+      "reason": "Extra data: line 1 column 1621 (char 1620)"
+    }
+  ],
+  "failed_models": [
+    "openrouter/google/gemma-4-31b-it:free",
+    "openrouter/google/gemma-4-26b-a4b-it:free",
+    "nvidia/minimaxai/minimax-m2.7",
+    "nvidia/z-ai/glm-5.2",
+    "nvidia/deepseek-ai/deepseek-v4-pro",
+    "nvidia/deepseek-ai/deepseek-v4-flash",
+    "nvidia/moonshotai/kimi-k2.6",
+    "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+    "nvidia/nemotron-3-ultra-550b-a55b",
+    "nvidia/parakeet-ctc-1.1b-asr",
+    "gemini/gemini-3.7-flash",
+    "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+    "gemini/gemini-3.5-flash-lite",
+    "gemini/gemini-3.6-flash",
+    "gemini/gemini-3.8-flash",
+    "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+    "gemini/gemini-3-flash-preview",
+    "gemini/gemini-3.1-flash-lite-preview",
+    "Free_Shit",
+    "gemini/gemini-3.1-pro-preview",
+    "cf/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "cf/@cf/mistralai/mistral-small-3.1-24b-instruct",
+    "cf/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+    "cf/@cf/meta/llama-3.1-70b-instruct-fp8-fast",
+    "cf/@cf/zai-org/glm-4.7-flash",
+    "cf/@cf/qwen/qwq-32b",
+    "gemini/gemma-4-31b-it",
+    "cf/@cf/qwen/qwen2.5-coder-32b-instruct",
+    "ollama/gpt-oss:120b",
+    "ollama/minimax-m2.5",
+    "ollama/kimi-k2.5",
+    "ollama/glm-5",
+    "ollama/glm-4.7-flash",
+    "ollama/minimax-m3",
+    "ollama/qwen3.5",
+    "cf/@cf/moonshotai/kimi-k2.5",
+    "cf/@cf/moonshotai/kimi-k2.6",
+    "kgw/nvidia/nemotron-3-super-120b-a12b:free",
+    "kgw/kilo-auto/frontier",
+    "kgw/kwaipilot/kat-coder-pro-v2.5:free",
+    "ps/laguna-s-2.1",
+    "ps/laguna-xs-2.1",
+    "kgw/kilo-auto/free",
+    "kimchi/kimi-k2.7",
+    "kimchi/nemotron-3-ultra-fp4",
+    "kgw/kilo-auto/balanced",
+    "kimchi/glm-5.3-flash",
+    "kimchi/glm-5.3",
+    "kimchi/minimax-m3",
+    "kimchi/kimi-k3",
+    "kimchi/deepseek-v4-flash-0731",
+    "kgw/nvidia/nemotron-3-ultra-550b-a55b:free"
+  ]
+}

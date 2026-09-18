@@ -219,7 +219,13 @@ export function stationIdPrompt({ context = null, persona = null }: any = {}) {
   const handoverNudge = nextShow
     ? ` The next scheduled show is "${String(handover.nextShow.name).trim()}" with ${String(handover.nextShow.presenter).trim()}. If natural, give it one brief nod; do not make it a required signpost or explain the schedule.`
     : '';
+
+  const rules = [
+    'Ensure the script has a strong, logical ending. Do not trail off or end mid-thought; end as if confidently wrapping up a point or leading into the music.',
+  ];
+
   ctxLines.push(`Task: ${lengthPhrase('stationId', speaker)} for ${stationName} with ${djName}. A little understated.${clockNudge}${handoverNudge}`);
+  ctxLines.push(`Rules:\n${rules.map((r) => `- ${r}`).join('\n')}`);
   return ctxLines.join('\n');
 }
 

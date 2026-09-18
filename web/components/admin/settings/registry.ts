@@ -91,7 +91,7 @@ export const SECTIONS = [
   {
     id: 'tts', group: 'the dj', label: 'TTS voice',
     hint: 'default engine', icon: Mic,
-    formKeys: ['tts', 'kokoroLang'],
+    formKeys: ['tts', 'kokoroLang', 'djSpeakClock', 'handoverOffsetMinutes'],
   },
   {
     id: 'library', group: 'the dj', label: 'Library tagger',

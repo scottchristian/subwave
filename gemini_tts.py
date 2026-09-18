@@ -60,9 +60,16 @@ def log_tts_request(persona: str, voice_used: str, text: str):
     except Exception as e:
         print(f"Failed to log TTS request to SQLite: {e}")
 
+class GeminiSafety(BaseModel):
+    harassment: bool = False
+    hateSpeech: bool = False
+    sexuallyExplicit: bool = False
+    dangerousContent: bool = False
+
 class SpeakRequest(BaseModel):
     text: str
     voice: str = ""
+    geminiSafety: GeminiSafety | None = None
 
 # Map personas to 9 distinct Gemini voices (from https://ai.google.dev/gemini-api/docs/speech-generation#voices)
 VOICE_MAP = {
@@ -135,15 +142,20 @@ def speak(req: SpeakRequest):
     for model_name in models_to_try:
         for attempt in range(max_retries):
             try:
+                safe_harass = "BLOCK_NONE" if getattr(req.geminiSafety, "harassment", False) else "BLOCK_MEDIUM_AND_ABOVE"
+                safe_hate = "BLOCK_NONE" if getattr(req.geminiSafety, "hateSpeech", False) else "BLOCK_MEDIUM_AND_ABOVE"
+                safe_sex = "BLOCK_NONE" if getattr(req.geminiSafety, "sexuallyExplicit", False) else "BLOCK_MEDIUM_AND_ABOVE"
+                safe_danger = "BLOCK_NONE" if getattr(req.geminiSafety, "dangerousContent", False) else "BLOCK_MEDIUM_AND_ABOVE"
+                
                 response = client.models.generate_content(
                     model=model_name,
                     contents=final_text,
                     config=types.GenerateContentConfig(
                         safety_settings=[
-                            types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
-                            types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
-                            types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
-                            types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE")
+                            types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold=safe_harass),
+                            types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold=safe_hate),
+                            types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold=safe_sex),
+                            types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold=safe_danger)
                         ],
                         response_modalities=["AUDIO"],
                         speech_config=types.SpeechConfig(
@@ -200,6 +212,7 @@ class SpeakLine(BaseModel):
 
 class SpeakMultiRequest(BaseModel):
     lines: list[SpeakLine]
+    geminiSafety: GeminiSafety | None = None
 
 @app.post("/speak-multi")
 def speak_multi(req: SpeakMultiRequest):
@@ -261,15 +274,20 @@ def speak_multi(req: SpeakMultiRequest):
     for model_name in models_to_try:
         for attempt in range(max_retries):
             try:
+                safe_harass = "BLOCK_NONE" if getattr(req.geminiSafety, "harassment", False) else "BLOCK_MEDIUM_AND_ABOVE"
+                safe_hate = "BLOCK_NONE" if getattr(req.geminiSafety, "hateSpeech", False) else "BLOCK_MEDIUM_AND_ABOVE"
+                safe_sex = "BLOCK_NONE" if getattr(req.geminiSafety, "sexuallyExplicit", False) else "BLOCK_MEDIUM_AND_ABOVE"
+                safe_danger = "BLOCK_NONE" if getattr(req.geminiSafety, "dangerousContent", False) else "BLOCK_MEDIUM_AND_ABOVE"
+                
                 response = client.models.generate_content(
                     model=model_name,
                     contents=final_text,
                     config=types.GenerateContentConfig(
                         safety_settings=[
-                            types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
-                            types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
-                            types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
-                            types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE")
+                            types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold=safe_harass),
+                            types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold=safe_hate),
+                            types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold=safe_sex),
+                            types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold=safe_danger)
                         ],
                         response_modalities=["AUDIO"],
                         speech_config=types.SpeechConfig(

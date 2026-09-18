@@ -439,6 +439,11 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
         recapMinutes: String(v.djBehaviour?.recapMinutes ?? 120),
         recapChars: String(v.djBehaviour?.recapChars ?? 140),
       },
+      // Absent reads as ON, matching the controller's coercion.
+      djSpeakClock: v.djSpeakClock !== false,
+      // Absent (a settings.json predating the key) reads as the 5-minute
+      // default — where the sign-off has always aired.
+      handoverOffsetMinutes: String(v.handover?.offsetMinutes ?? 5),
       weather: {
         lat: String(v.weather?.lat ?? ''),
         lng: String(v.weather?.lng ?? ''),
@@ -512,6 +517,14 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
         provider: v.llm?.provider ?? 'ollama',
         model: v.llm?.model ?? '',
         modelOverrides: v.llm?.modelOverrides ?? {},
+        banterPrompt: v.llm?.banterPrompt ?? '',
+        listenerPrompt: v.llm?.listenerPrompt ?? '',
+        geminiSafety: {
+          harassment: !!v.llm?.geminiSafety?.harassment,
+          hateSpeech: !!v.llm?.geminiSafety?.hateSpeech,
+          sexuallyExplicit: !!v.llm?.geminiSafety?.sexuallyExplicit,
+          dangerousContent: !!v.llm?.geminiSafety?.dangerousContent,
+        },
         ollamaUrl: v.llm?.ollamaUrl ?? '',
         numCtx: typeof v.llm?.numCtx === 'number' ? v.llm.numCtx : 16384,
         repeatPenalty: typeof v.llm?.repeatPenalty === 'number' ? v.llm.repeatPenalty : 1.15,

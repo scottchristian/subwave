@@ -21,6 +21,7 @@ import { resolvePersonaVoiceSlot } from './persona-engine.js';
 import { stripThinking } from '../llm/sdk.js';
 import * as settings from '../settings.js';
 import { recordTts } from '../stats.js';
+import { logEvent } from '../observability/events.js';
 import { energyForDaypart } from '../context.js';
 
 export const ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts', 'cloud', 'remote'];
@@ -412,6 +413,8 @@ export async function speak(
       ...callBase, engine: primary, fellBack: primaryFellBack,
       ok: true, ms: Date.now() - started, t: new Date().toISOString(),
     });
+    logEvent('tts', { chars, engine: primary });
+
     return result;
   } catch (err) {
     // Primary passed the pre-flight gate but threw mid-render: walk the chain.
@@ -441,6 +444,7 @@ export async function speak(
           ...callBase, engine: fallback, fellBack: true,
           ok: true, ms: Date.now() - started, t: new Date().toISOString(),
         });
+        logEvent('tts', { chars: rescueText.length, engine: fallback });
         return result;
       } catch (err2) {
         lastErr = err2;
@@ -501,6 +505,8 @@ export async function speakExchange(
       engine: 'remote', fellBack: false,
       ok: true, ms: Date.now() - started, t: new Date().toISOString(),
     });
+    const totalChars = lines.reduce((acc, l) => acc + (l.text || '').length, 0);
+    logEvent('tts', { chars: totalChars, engine: 'remote' });
     
     return result;
   } catch (err) {

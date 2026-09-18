@@ -1120,6 +1120,34 @@ router.delete('/dj/queue/block/:blockId', requireAdmin, async (req, res) => {
   } catch (err) {
     queue.log('error', `/dj/queue block cancel failed: ${err.message}`);
     res.status(502).json({ error: err.message });
+// POST /dj/queue-with-intro — push a specific track to the queue with a raw intro
+// Body: { track: {id, title, artist}, introScript: string, requester?: string }
+// ---------------------------------------------------------------------------
+router.post('/dj/queue-with-intro', requireAdmin, async (req, res) => {
+  const { track, introScript, requester } = req.body || {};
+  if (!track?.id || !track?.title || !introScript) {
+    return res.status(400).json({ error: 'track.id, track.title, and introScript are required' });
+  }
+  try {
+    const queuePosition = await queue.push({
+      track,
+      requestedBy: requester || 'studio',
+      intent: 'play_track',
+      introScript,
+      introKind: 'dj-speak',
+      allowDuplicate: true
+    });
+    if (queuePosition === -2) {
+      return res.status(409).json({ error: 'track is on the never-play blocklist — unblock it first' });
+    }
+    res.json({
+      ok: true,
+      track: { title: track.title, artist: track.artist || null },
+      queuePosition,
+    });
+  } catch (err: any) {
+    queue.log('error', `/dj/queue-with-intro failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
   }
 });
 

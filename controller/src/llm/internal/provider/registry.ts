@@ -87,33 +87,238 @@ export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch, forceNoT
   const penalty = appliedRepeatPenalty(cfg);
   const noThink = forceNoThink || cfg?.reasoning !== true;
   return (url: any, init: any) => {
+    let reqModel = '';
+    // Captured for the response-side prose→tool-call synthesiser below.
+    let reqToolChoice: any;
+    let reqTools: any[] = [];
     if (init?.body && typeof init.body === 'string') {
       try {
         const body = JSON.parse(init.body);
+        reqModel = body.model;
+        reqToolChoice = body.tool_choice;
+        reqTools = Array.isArray(body.tools) ? body.tools : [];
         if (penalty != null && body.repeat_penalty === undefined) {
           body.repeat_penalty = penalty;
         }
         if (noThink) {
-          body.chat_template_kwargs = {
-            ...(body.chat_template_kwargs || {}),
-            enable_thinking: false,
-          };
-          if (body.reasoning_format === undefined) body.reasoning_format = 'deepseek';
-          if (body.thinking === undefined) body.thinking = { type: 'disabled' };
-          if (body.reasoning === undefined) {
-            body.reasoning = reasoningMandatoryModel(String(body.model || ''))
-              ? { effort: 'minimal' }
-              : { enabled: false };
+          const m = String(body.model || '').toLowerCase();
+          // Skip OpenAI-specific no-think params for models that are routed
+          // through an aggregator (gemini/, cf/, free_shit) — they don't
+          // understand these fields and will 400 or ignore them.
+          if (!m.startsWith('gemini/') && !m.startsWith('cf/') && m !== 'free_shit') {
+            body.chat_template_kwargs = {
+              ...(body.chat_template_kwargs || {}),
+              enable_thinking: false,
+            };
+            if (body.reasoning_format === undefined) body.reasoning_format = 'deepseek';
+            if (body.thinking === undefined) body.thinking = { type: 'disabled' };
+            if (body.reasoning === undefined) {
+              body.reasoning = reasoningMandatoryModel(m)
+                ? { effort: 'minimal' }
+                : { enabled: false };
+            }
           }
         }
         if (Array.isArray(body.tools) && body.tools.length > 0 &&
             body.parallel_tool_calls === undefined) {
           body.parallel_tool_calls = false;
         }
+        if (body.stream === undefined) body.stream = false;
+        // Disable Gemini's default safety filters when the model is routed via
+        // 9router's OpenAI-compatible path (gemini/ prefix). The native `google`
+        // provider has safetySettings: BLOCK_NONE wired in registry.ts, but that
+        // path is bypassed here. `safe_prompt: false` is 9router's mechanism to
+        // pass through BLOCK_NONE to the upstream Gemini API.
+        // Confirmed working: gemini/gemini-3.8-flash via 9router responds to
+        // explicit requests that would otherwise be blocked.
+        if (String(body.model || '').toLowerCase().startsWith('gemini/')) {
+          body.safe_prompt = false;
+        }
         init = { ...init, body: JSON.stringify(body) };
       } catch { /* not JSON — leave the request untouched */ }
     }
-    return baseFetch(url, init);
+    const t0 = Date.now();
+    const parsedBodyForLog = init?.body ? JSON.parse(init.body) : null;
+    console.log(`[LLM Fetch] starting request to ${url}... model=${parsedBodyForLog?.model ?? 'unknown'}`);
+
+    return baseFetch(url, init).then(async (res: any) => {
+      const ms = Date.now() - t0;
+      if (res.status >= 400) {
+        const clone = res.clone();
+        const text = await clone.text().catch(() => 'could not read body');
+        console.log(`[LLM Fetch] ${url} returned ${res.status} in ${ms}ms. Body: ${text}`);
+      } else {
+        console.log(`[LLM Fetch] ${url} returned ${res.status} in ${ms}ms`);
+        if (reqModel) {
+          try {
+            const clone = res.clone();
+            const text = await clone.text();
+            const json = JSON.parse(text);
+            // Strip markdown fences from tool_call arguments. Certain models
+            // (e.g. Nemotron via Free_Shit) occasionally emit their tool call
+            // arguments wrapped in ```json fences, which makes ai-sdk's JSON
+            // parser crash with "Invalid JSON response". Sanitise in-flight so
+            // the failure never reaches the SDK layer.
+            let mutated = false;
+            const choices = json.choices;
+            if (Array.isArray(choices)) {
+              for (const choice of choices) {
+                const toolCalls = choice?.message?.tool_calls;
+                if (Array.isArray(toolCalls)) {
+                  for (const tc of toolCalls) {
+                    const raw = tc?.function?.arguments;
+                    if (typeof raw === 'string') {
+                      try {
+                        JSON.parse(raw);
+                      } catch {
+                        // Not valid JSON — try to extract it from markdown fences or prose
+                        let extracted = raw;
+                        const match = raw.match(/\`\`\`(?:json)?\s*(\{[\s\S]*?\})\s*\`\`\`/i);
+                        if (match) {
+                          extracted = match[1];
+                        } else {
+                          const first = raw.indexOf('{');
+                          const last = raw.lastIndexOf('}');
+                          if (first !== -1 && last !== -1 && last > first) {
+                            extracted = raw.substring(first, last + 1);
+                          }
+                        }
+                        if (extracted !== raw) {
+                          try {
+                            JSON.parse(extracted); // Verify we actually extracted valid JSON
+                            tc.function.arguments = extracted;
+                            mutated = true;
+                            console.log(`[LLM Fetch] extracted JSON tool_call arguments from prose for '${tc.function?.name}'`);
+                          } catch (err: any) {
+                            console.log(`[LLM Fetch] failed to extract valid JSON from prose. Raw was: ${JSON.stringify(raw)}`);
+                          }
+                        } else {
+                          const reqTools = body.tools || [];
+                          const toolSchema = reqTools.find((t: any) => t?.function?.name === tc.function?.name);
+                          const props = toolSchema?.function?.parameters?.properties;
+                          
+                          if (props && (props.text || props.say || props.reason || props.query)) {
+                            const synthArgs: Record<string, any> = {};
+                            if (props.id)     synthArgs.id     = `synth-${Date.now()}`;
+                            if (props.reason) synthArgs.reason = 'auto';
+                            if (props.air)    synthArgs.air    = true;
+                            if (props.say)    synthArgs.say    = raw;
+                            if (props.text)   synthArgs.text   = raw;
+                            if (props.transition) synthArgs.transition = 'auto';
+                            if (props.sfx)    synthArgs.sfx    = null;
+                            if (props.query)  synthArgs.query  = raw;
+                            
+                            tc.function.arguments = JSON.stringify(synthArgs);
+                            mutated = true;
+                            console.log(`[LLM Fetch] wrapped plain text into JSON object for '${tc.function?.name}'`);
+                          } else {
+                            console.log(`[LLM Fetch] raw tool_call arguments string is not valid JSON and could not be extracted. Raw was: ${JSON.stringify(raw)}`);
+                          }
+                        }
+                      }
+                    } else if (typeof raw === 'object' && raw !== null) {
+                      // Some models (via OpenRouter/9router) return the arguments as a JSON object directly
+                      // instead of a stringified JSON string. ai-sdk uses a strict Zod schema that expects a string,
+                      // so this causes an "Invalid JSON response" crash if we don't fix it.
+                      tc.function.arguments = JSON.stringify(raw);
+                      mutated = true;
+                      console.log(`[LLM Fetch] converted object tool_call arguments to string for '${tc.function?.name}'`);
+                    }
+                  }
+                }
+              }
+            }
+            // --- Prose → tool-call synthesis ---
+            // Nemotron (Free_Shit) occasionally writes plain text instead of
+            // calling the forced terminal tool (done/emit). This intercepts
+            // that case and synthesises a proper tool_calls entry so ai-sdk
+            // never sees the raw prose.
+            //
+            // Synthesis ONLY fires when:
+            //   1. The request had tool_choice:'required'
+            //   2. The response has text content but no tool_calls
+            //   3. There is a terminal tool (done/emit) whose schema has a
+            //      'text' string property — i.e. a segment/skill output.
+            //
+            // Picker calls (schema requires an 'id' field, not 'text') are
+            // intentionally excluded so their normal failover path runs.
+            if (reqToolChoice === 'required' && reqTools.length > 0 && Array.isArray(choices)) {
+              for (const choice of choices) {
+                const msg = choice?.message;
+                const hasToolCalls = Array.isArray(msg?.tool_calls) && msg.tool_calls.length > 0;
+                const hasContent = typeof msg?.content === 'string' && msg.content.trim().length > 0;
+                if (!hasToolCalls && hasContent) {
+                  // Synthesise tool call from prose, or extract it if they dumped JSON into the content block
+                  const terminalTool = reqTools.find((t: any) => t?.function?.name === 'done' || t?.function?.name === 'emit');
+                  if (terminalTool) {
+                    const content = msg.content.trim();
+                    const props = terminalTool.function?.parameters?.properties;
+                    if (props != null) {
+                      let parsedFromContent: Record<string, any> | null = null;
+                      try {
+                        const match = content.match(/\`\`\`(?:json)?\s*(\{[\s\S]*?\})\s*\`\`\`/i);
+                        const strToParse = match ? match[1] : content.substring(content.indexOf('{'), content.lastIndexOf('}') + 1);
+                        if (strToParse) parsedFromContent = JSON.parse(strToParse);
+                      } catch (e) {
+                        // ignore parse failure, fallback to raw string mapping
+                      }
+
+                      const synthArgs: Record<string, any> = {};
+                      if (props.id)     synthArgs.id     = parsedFromContent?.id ?? `synth-${Date.now()}`;
+                      if (props.reason) synthArgs.reason = parsedFromContent?.reason ?? 'auto';
+                      if (props.air)    synthArgs.air    = parsedFromContent?.air ?? true;
+                      if (props.say)    synthArgs.say    = parsedFromContent?.say ?? content;
+                      if (props.text)   synthArgs.text   = parsedFromContent?.text ?? (parsedFromContent?.parameters?.text ?? content);
+                      if (props.transition) synthArgs.transition = parsedFromContent?.transition ?? 'auto';
+                      if (props.sfx)    synthArgs.sfx    = parsedFromContent?.sfx ?? null;
+
+                      msg.tool_calls = [{
+                        id: `synth-${Date.now()}`,
+                        type: 'function',
+                        function: {
+                          name: terminalTool.function.name,
+                          arguments: JSON.stringify(synthArgs),
+                        }
+                      }];
+                      msg.content = null;
+                      choice.finish_reason = 'tool_calls';
+                      mutated = true;
+                      console.log(`[LLM Fetch] synthesised '${terminalTool.function.name}' tool call from prose (${content.length} chars)`);
+                    }
+                  }
+                }
+              }
+            }
+            // --- End prose → tool-call synthesis ---
+
+            if (json.model && json.model !== reqModel) {
+              console.log(`[LLM Fetch] rewriting response model from '${json.model}' to '${reqModel}'`);
+              json.model = reqModel;
+              mutated = true;
+            }
+            if (mutated) {
+              const newHeaders = new Headers(res.headers);
+              newHeaders.delete('content-encoding');
+              newHeaders.delete('content-length');
+              newHeaders.delete('transfer-encoding');
+              return new Response(JSON.stringify(json), {
+                status: res.status,
+                statusText: res.statusText,
+                headers: newHeaders,
+              });
+            }
+          } catch (e) {
+            // Not JSON or parse error on the main response envelope, just return original
+            console.log(`[LLM Fetch] FATAL: model returned invalid JSON wrapper. Raw body: ${text.substring(0, 500)}`);
+          }
+        }
+      }
+      return res;
+    }).catch((err: any) => {
+      const ms = Date.now() - t0;
+      console.log(`[LLM Fetch] ${url} FAILED in ${ms}ms: ${err.message}`);
+      throw err;
+    });
   };
 }
 
@@ -258,13 +463,18 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
       break;
     }
     case 'google': {
-      const provider = createGoogleGenerativeAI({ fetch: debugFetch, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
+      const provider = createGoogleGenerativeAI({ 
+        fetch: debugFetch, 
+        ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}),
+        ...(cfg.baseUrl ? { baseURL: cfg.baseUrl, headers: { Authorization: `Bearer ${cfg.apiKey}` } } : {}) 
+      });
+      // @ts-ignore - provider types changed in newer ai-sdk versions
       model = provider(id, {
         safetySettings: [
-          { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' }
+          { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: cfg.geminiSafety?.hateSpeech ? 'BLOCK_NONE' : 'BLOCK_MEDIUM_AND_ABOVE' },
+          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: cfg.geminiSafety?.dangerousContent ? 'BLOCK_NONE' : 'BLOCK_MEDIUM_AND_ABOVE' },
+          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: cfg.geminiSafety?.sexuallyExplicit ? 'BLOCK_NONE' : 'BLOCK_MEDIUM_AND_ABOVE' },
+          { category: 'HARM_CATEGORY_HARASSMENT', threshold: cfg.geminiSafety?.harassment ? 'BLOCK_NONE' : 'BLOCK_MEDIUM_AND_ABOVE' }
         ]
       });
       break;

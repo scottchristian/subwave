@@ -16,6 +16,7 @@ import {
   useStationOrigin,
   type StationOrigin,
 } from '@/lib/stationOrigin';
+import { getStationAuthToken } from '@/lib/stationAuth';
 import type { Theme } from '@/lib/theme';
 import type {
   NowPlayingResponse,
@@ -112,16 +113,22 @@ export function createStationClient(origin: StationOrigin): StationClient {
       return json<ThemesPayload>(r);
     },
     submitRequest: async (text, name) => {
+      const token = getStationAuthToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['x-station-auth'] = token;
       const r = await fetch(`${api}/request`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ text, name }),
       });
       return json<RequestResult>(r);
     },
     requestStatus: async requestId => {
       try {
-        const r = await fetch(`${api}/request/${requestId}`);
+        const token = getStationAuthToken();
+        const headers: Record<string, string> = {};
+        if (token) headers['x-station-auth'] = token;
+        const r = await fetch(`${api}/request/${requestId}`, { headers });
         if (r.status === 404) return { success: false, status: 'unknown' };
         return await json<RequestResult>(r);
       } catch {

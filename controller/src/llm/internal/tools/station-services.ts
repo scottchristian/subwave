@@ -20,6 +20,9 @@ import { searchWeb, searchReady } from '../../../skills/web-search.js';
 import { fetchOnThisDay, curiositySeen, recordCuriosity } from '../../../skills/curiosity.js';
 import { fetchHeadlines, hashHeadline } from '../../../skills/feed.js';
 import { getArtist, getAlbum, searchArtists } from '../../../music/subsonic.js';
+import { dailyTokensUsed, dailyTtsCharsUsed, lifetimeTokenCount } from '../../log.js';
+import { peakListenersToday } from '../telemetry/budget.js';
+import { getStreamStatus } from '../../../broadcast/listeners.js';
 
 export interface StationServices {
   // Web search via the operator's configured provider (DuckDuckGo / Tavily /
@@ -42,6 +45,14 @@ export interface StationServices {
   recall: { seen: (key: string) => boolean; remember: (key: string) => void };
   // Append a namespaced line to the station event log.
   log: (msg: string) => void;
+  // Station performance and budget telemetry.
+  telemetry: {
+    dailyTokensUsed: () => number;
+    dailyTtsCharsUsed: () => number;
+    lifetimeTokenCount: () => number;
+    peakListeners: () => number;
+    uptime: () => number;
+  };
 }
 
 let cached: StationServices | null = null;
@@ -62,6 +73,13 @@ export function buildStationServices(): StationServices {
     hashHeadline,
     recall: { seen: (key: string) => curiositySeen(key), remember: (key: string) => recordCuriosity(key) },
     log: (msg: string) => queue.log('scheduler', `[skill] ${msg}`),
+    telemetry: {
+      dailyTokensUsed,
+      dailyTtsCharsUsed,
+      lifetimeTokenCount,
+      peakListeners: () => peakListenersToday(),
+      uptime: () => process.uptime(),
+    },
   };
   return cached;
 }

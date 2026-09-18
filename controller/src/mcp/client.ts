@@ -306,6 +306,7 @@ export class SubwaveClient {
     return this.call<RequestSubmission>("/request", {
       method: "POST",
       body: { text, name: requester },
+      station: true,
     });
   }
 
@@ -314,6 +315,7 @@ export class SubwaveClient {
     // 404 here means "unknown id" (pruned or lost to a restart), not an error.
     return this.call<RequestStatus>(`/request/${encodeURIComponent(id)}`, {
       allowStatuses: [404],
+      station: true,
     });
   }
 

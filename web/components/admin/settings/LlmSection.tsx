@@ -7,6 +7,7 @@ import { adminResponse } from '../../../lib/admin-query';
 import { useModelDiscovery } from '@/hooks/useModelDiscovery';
 import { V3AlertDialog } from '../../ui/alert-dialog';
 import { Input } from '../../ui/input';
+import { Textarea } from '../../ui/textarea';
 import { Label } from '../../ui/label';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
@@ -327,6 +328,9 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         budgetSoftPct: form.llm.budgetSoftPct,
         exemptRequests: form.llm.exemptRequests,
         maxOutputTokens: form.llm.maxOutputTokens,
+        banterPrompt: form.llm.banterPrompt,
+        listenerPrompt: form.llm.listenerPrompt,
+        geminiSafety: form.llm.geminiSafety,
         discoverySteps: form.llm.discoverySteps,
         ...(INLINE_KEY_PROVIDERS.includes(activeProvider) && compatKeyInput.trim()
           ? { apiKey: compatKeyInput.trim() }
@@ -1123,6 +1127,78 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         </div>
       </Card>
 
+      <Card title="Agent Prompts" sub="custom instructions">
+        <div className="field">
+          <Label>Banter Rules</Label>
+          <Textarea
+            value={form.llm.banterPrompt ?? ''}
+            onChange={(e: ChangeEvent<HTMLTextAreaElement>) =>
+              setForm(f => ({ ...f, llm: { ...f.llm, banterPrompt: e.target.value } }))
+            }
+            placeholder="Enter rules for banter..."
+            className="min-h-[120px] max-w-[600px] font-mono text-[13px]"
+          />
+          <div className="field-hint">
+            Extra instructions injected into the banter prompt (e.g. how the DJs should interact, constraints on what they can say). Leave blank to disable.
+            <br />
+            Available variables: <code className="text-[11px] bg-white/5 px-1 py-0.5 rounded text-white/70">{'{host}'}</code>, <code className="text-[11px] bg-white/5 px-1 py-0.5 rounded text-white/70">{'{guest}'}</code>, <code className="text-[11px] bg-white/5 px-1 py-0.5 rounded text-white/70">{'{guests}'}</code>, <code className="text-[11px] bg-white/5 px-1 py-0.5 rounded text-white/70">{'{show}'}</code>
+          </div>
+        </div>
+
+        <div className="field mt-4">
+          <Label>Listener Activities (Core Prompt)</Label>
+          <Textarea
+            value={form.llm.listenerPrompt ?? ''}
+            onChange={(e: ChangeEvent<HTMLTextAreaElement>) =>
+              setForm(f => ({ ...f, llm: { ...f.llm, listenerPrompt: e.target.value } }))
+            }
+            placeholder="Enter rules for listener activities..."
+            className="min-h-[120px] max-w-[600px] font-mono text-[13px]"
+          />
+          <div className="field-hint">
+            Instructions injected into the core DJ prompt to guide how the AI describes listener activities during segments.
+          </div>
+        </div>
+      </Card>
+
+      <Card title="Gemini Safety Filters" sub="content blocking">
+        <div className="field">
+          <Label>Block categories</Label>
+          <div className="flex flex-col gap-2 mt-2">
+            {[
+              { id: 'harassment', label: 'Harassment' },
+              { id: 'hateSpeech', label: 'Hate Speech' },
+              { id: 'sexuallyExplicit', label: 'Sexually Explicit' },
+              { id: 'dangerousContent', label: 'Dangerous Content' },
+            ].map(c => (
+              <label key={c.id} className="flex cursor-pointer items-center gap-2 text-[13px] leading-[1.5] text-ink">
+                <input
+                  type="checkbox"
+                  checked={!!form.llm.geminiSafety?.[c.id as keyof typeof form.llm.geminiSafety]}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setForm(f => ({
+                      ...f,
+                      llm: {
+                        ...f.llm,
+                        geminiSafety: {
+                          ...(f.llm.geminiSafety || { harassment: false, hateSpeech: false, sexuallyExplicit: false, dangerousContent: false }),
+                          [c.id]: e.target.checked
+                        }
+                      }
+                    }))
+                  }
+                  className="accent-[var(--accent)]"
+                />
+                <span>{c.label}</span>
+              </label>
+            ))}
+          </div>
+          <div className="field-hint mt-2">
+            By default, Gemini heavily filters output (blocking anything it considers explicit, dangerous, etc). Uncheck these to allow the DJs to swear or discuss sensitive topics during banter.
+          </div>
+        </div>
+      </Card>
+
       <Card title="Next-track picker" sub="how the DJ chooses">
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
           <div>
@@ -1429,7 +1505,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           ].map(task => (
             <div className="field" key={task.id}>
               <Label>{task.label}</Label>
-              <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
+              <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
                 {primaryDiscovery.models.length > 0 ? (
                   <ModelCombobox
                     models={primaryDiscovery.models}
@@ -1446,6 +1522,11 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                     placeholder="Use primary model (or type model ID)"
                     className="max-w-[360px]"
                   />
+                )}
+                {!!form.llm.modelOverrides?.[task.id] && (
+                  <Btn sm onClick={() => setForm(f => ({ ...f, llm: { ...f.llm, modelOverrides: { ...(f.llm.modelOverrides || {}), [task.id]: '' } } }))}>
+                    Clear
+                  </Btn>
                 )}
               </div>
               <div className="field-hint">{task.desc}</div>

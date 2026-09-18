@@ -17,6 +17,7 @@ import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { fetchWithTimeout } from '../../util/fetch-timeout.js';
 import { probeFishKey } from '../../llm/speech.js';
+import { openAICompatibleFetch } from '../../llm/internal/provider/registry.js';
 
 // Mounted onto the parent settings router in ../settings.ts.
 export const router = express.Router();
@@ -312,6 +313,7 @@ router.post('/settings/llm/probe-compat', requireAdmin, async (req, res) => {
       apiKey: resolvedApiKey || 'no-key',
       baseURL: baseUrl.trim().replace(/\/+$/, ''),
       ...(probeHeaders ? { headers: probeHeaders } : {}),
+      fetch: openAICompatibleFetch({}, fetch, true),
     }).chat(model.trim());
     await generateText({
       model: m,

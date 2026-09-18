@@ -92,10 +92,11 @@ export async function speak(
   const outPath = customPath || path.join(config.piper.outDir, `${crypto.randomBytes(6).toString('hex')}.wav`);
   await mkdir(path.dirname(outPath), { recursive: true });
 
+  const geminiSafety = settings.get().llm.geminiSafety;
   const res = await fetchWithTimeout(`${url}/speak`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text: text.trim(), voice: voice ?? '' }),
+    body: JSON.stringify({ text: text.trim(), voice: voice ?? '', geminiSafety }),
     timeoutMs: REQUEST_TIMEOUT_MS,
   });
   if (!res.ok) {
@@ -154,10 +155,11 @@ export async function speakMulti(
   const outPath = customPath || path.join(config.piper.outDir, `${crypto.randomBytes(6).toString('hex')}.wav`);
   await mkdir(path.dirname(outPath), { recursive: true });
 
+  const geminiSafety = settings.get().llm.geminiSafety;
   const res = await fetchWithTimeout(`${url}/speak-multi`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ lines: lines.map(l => ({ text: l.text.trim(), voice: l.voice ?? '' })) }),
+    body: JSON.stringify({ lines: lines.map(l => ({ text: l.text.trim(), voice: l.voice ?? '' })), geminiSafety }),
     timeoutMs: REQUEST_TIMEOUT_MS,
   });
   if (!res.ok) {

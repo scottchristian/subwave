@@ -184,6 +184,14 @@ export interface LlmForm {
   budgetSoftPct: number;
   exemptRequests: boolean;
   maxOutputTokens: number;
+  banterPrompt: string;
+  listenerPrompt: string;
+  geminiSafety: {
+    harassment: boolean;
+    hateSpeech: boolean;
+    sexuallyExplicit: boolean;
+    dangerousContent: boolean;
+  };
   // 0 = auto (follow the provider capability table); 1-5 overrides it.
   discoverySteps: number;
   fallback: LlmFallbackForm;
@@ -387,6 +395,14 @@ export interface FormState {
   /** Station-wide minimum length before a show may use pause-and-talk. */
   pauseTalkMinSeconds: string;
   djBehaviour: DjBehaviourForm;
+  /** Station clock switch — allow the DJ to read the time of day on air. */
+  djSpeakClock: boolean;
+  /** settings.handover.offsetMinutes — how many minutes before a show boundary
+   *  the outgoing host signs off. A string like every other number control, but
+   *  the values are a fixed set (multiples of the talk table's sampling stride),
+   *  so it renders as a segmented control and can never carry a free-text
+   *  error. Owned by the TTS section, beside talk placement. */
+  handoverOffsetMinutes: string;
   weather: WeatherCfg;
   tts: TtsForm;
   llm: LlmForm;
@@ -463,6 +479,7 @@ export interface SettingsData {
     djTalkOnlyBetweenTracks?: boolean;
     pauseTalkMinSeconds?: number;
     djBehaviour?: DjBehaviourValues;
+    djSpeakClock?: boolean;
     /** Absent on a settings.json predating the key — the controller's own
      *  coercion reads it as the 5-minute default. */
     handover?: { offsetMinutes?: number };

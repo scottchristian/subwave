@@ -608,6 +608,8 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
     // Redacted sentinel: 'set' means an inline key is on file in settings.json.
     const hadStoredInlineKey = data.values?.tts?.cloud?.apiKey === 'set';
     const settingsSaved = await saveSettings({
+      djSpeakClock: form.djSpeakClock,
+      handover: { offsetMinutes: Number(form.handoverOffsetMinutes) },
       tts: {
         enabled: form.tts.enabled,
         defaultEngine: form.tts.defaultEngine,
@@ -734,6 +736,10 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
     // Absent reads as ON, matching the controller's coercion — so an untouched
     // pre-upgrade settings.json never shows up as dirty.
     form.tts.enabled !== (savedTts.enabled !== false)
+    // Absent reads as ON.
+    || form.djSpeakClock !== (data.values?.djSpeakClock !== false)
+    // Absent reads as the default, which is what the controller stores for it.
+    || form.handoverOffsetMinutes !== String(data.values?.handover?.offsetMinutes ?? 5)
     || form.tts.defaultEngine !== savedEngine
     || (form.tts.kokoro?.voice || '') !== savedKokoroVoice
     || (form.kokoroLang || '') !== savedKokoroLang
@@ -833,6 +839,52 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
           </p>
         </div>
 
+        <div className="field mt-6">
+          <Label>Station clock</Label>
+          <Seg
+            value={form.djSpeakClock ? 'on' : 'off'}
+            options={[
+              { id: 'on', label: 'On', title: 'The DJ can read the time of day on air' },
+              { id: 'off', label: 'Off', title: 'The DJ will never read the time of day on air' },
+            ]}
+            onChange={v => setForm(f => ({ ...f, djSpeakClock: v === 'on' }))}
+          />
+          <p className="mt-2 text-[13px] leading-[1.55] text-muted">
+            {form.djSpeakClock ? (
+              <>
+                The DJ may nod to the local time during links, idents, hand-overs, ad-libs, banter, or programme beats. The hourly top-of-the-hour time check will also fire automatically.
+              </>
+            ) : (
+              <>
+                Keeps the wall clock out of the DJ's mouth. The automatic top-of-the-hour time check is disabled, and the DJ will no longer mention the time of day in ordinary links. Daypart vibes (like "after dark" or "weekend") will still be mentioned to set the mood, but exact numerals are dropped.
+              </>
+            )}
+          </p>
+        </div>
+
+        <div className="field mt-6">
+          <Label>Show handover</Label>
+          <Seg
+            value={form.handoverOffsetMinutes}
+            options={[
+              { id: '5', label: '5 min', title: 'The outgoing host signs off at :55' },
+              { id: '10', label: '10 min', title: 'The outgoing host signs off at :50' },
+              { id: '15', label: '15 min', title: 'The outgoing host signs off at :45' },
+              { id: '20', label: '20 min', title: 'The outgoing host signs off at :40' },
+            ]}
+            onChange={v => setForm(f => ({ ...f, handoverOffsetMinutes: v }))}
+          />
+          <p className="mt-2 text-[13px] leading-[1.55] text-muted">
+            How long before a show ends the outgoing host <strong>signs off</strong> — the
+            programme outro, at :{60 - Number(form.handoverOffsetMinutes)} of the show&apos;s
+            final hour. Whatever you pick, the incoming host waits for{' '}
+            <strong>one closing track</strong> before opening, so the changeover is never two
+            voices back to back. Only whole 5-minute steps: the sign-off is placed on the
+            station&apos;s clock and checked every five minutes, so anything in between
+            would be a slot that never comes round.
+          </p>
+        </div>
+>>>>>>> Stashed changes
       </Card>
 
       <Card title="Voice engine" sub="active default">

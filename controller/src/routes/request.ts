@@ -21,6 +21,7 @@ import {
   REQUESTS_DISABLED,
 } from '../middleware/ratelimit.js';
 import { validatePublicBody } from '../middleware/validate.js';
+import { requireStationAuth } from '../middleware/station-auth.js';
 import { listenerRequestSchema } from '../schemas/request.js';
 import { shuffle } from '../util/shuffle.js';
 import { requestWaitClause } from '../broadcast/queue/pure.js';
@@ -144,6 +145,7 @@ function recordOutcome(entry) {
       t: new Date(entry.createdAt).toISOString(),
       id: String(entry.id).slice(0, 8),
       requester: entry.requester,
+      ip: entry.ip || null,
       text: entry.text,
       rawText: entry.rawText ?? null,
       injection: entry.injection ?? null,
@@ -668,7 +670,7 @@ async function resolveRequest(entry) {
 // needs server state the schema can't see.
 // validatePublicBody, not validateBody: the one LISTENER-facing form, so the 400
 // carries an unprefixed message plus the success/message keys the native app reads.
-router.post('/request', validatePublicBody(listenerRequestSchema), async (req, res) => {
+router.post('/request', requireStationAuth, validatePublicBody(listenerRequestSchema), async (req, res) => {
   const cfg = (settings.get() as any)?.requests || {};
   if (REQUESTS_DISABLED || cfg.enabled === false) {
     return res.status(503).json({ success: false, message: 'Requests are temporarily closed.' });
@@ -761,6 +763,7 @@ router.post('/request', validatePublicBody(listenerRequestSchema), async (req, r
   const id = randomUUID();
   const entry: any = {
     id, status: 'pending', requester, text,
+    ip,
     rawText: sanitizeRequestText(rawText),
     injection: stripped.injection,
     ack: null, track: null, queuePosition: null, message: null,
@@ -783,7 +786,7 @@ router.post('/request', validatePublicBody(listenerRequestSchema), async (req, r
 });
 
 // Poll for the outcome of a submitted request.
-router.get('/request/:id', (req, res) => {
+router.get('/request/:id', requireStationAuth, (req, res) => {
   const entry = requests.get(req.params.id);
   if (!entry) {
     // Never existed, or pruned / lost to a restart; the UI stops polling.

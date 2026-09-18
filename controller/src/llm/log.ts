@@ -14,7 +14,7 @@ export { recordAgentRetry, agentDoneRetryCount } from './internal/telemetry/log.
 // restart resumes the count instead of resetting it. `budgetMode` (the pure
 // normal/soft/hard policy) is re-exported here so the whole budget surface sits
 // behind one barrel; broadcast/dj-budget.ts combines it with settings.llm.
-export { dailyTokensUsed, seedDailyUsageFromLog } from './internal/telemetry/budget.js';
+export { dailyTokensUsed, dailyTtsCharsUsed, seedDailyUsageFromLog } from './internal/telemetry/budget.js';
 export { budgetMode } from './internal/core/pure.js';
 
 // Downloadable form of the ring buffer above (#1485). Pure serialisers only —

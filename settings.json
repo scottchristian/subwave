@@ -1,0 +1,792 @@
+{
+  "jingleRatio": 30,
+  "crossfadeDuration": 10,
+  "ducking": {
+    "voice": 0.22,
+    "intro": 0.3
+  },
+  "maxTrackSeconds": 0,
+  "fadeAtShowEnd": false,
+  "archive": {
+    "enabled": true,
+    "bitrate": 128,
+    "retentionDays": 30
+  },
+  "backups": {
+    "cadence": "off",
+    "keep": 7
+  },
+  "stream": {
+    "opusEnabled": false,
+    "opusBitrate": 96,
+    "flacEnabled": false,
+    "aacEnabled": false,
+    "aacBitrate": 192,
+    "bitrate": 192,
+    "oggIcyMetadata": true,
+    "bufferSeconds": 22,
+    "idleWhenEmpty": true,
+    "idleAfterMinutes": 3,
+    "maxListeners": 100,
+    "countryHeader": "",
+    "geoipDbPath": ""
+  },
+  "loudness": {
+    "targetLufs": -14,
+    "maxBoostDb": 6,
+    "source": "replaygain-then-measured"
+  },
+  "weather": {
+    "lat": -42.7948,
+    "lng": 147.52882,
+    "locationName": "Midway Point, Tasmania, Australia",
+    "onAirLocation": "Midway Point",
+    "units": "metric"
+  },
+  "djPrompt": "",
+  "djPrompts": [
+    {
+      "id": "dp_3df197",
+      "name": "Prompt 1",
+      "text": "You are {name}, the on-air DJ for {station}, a personal radio station broadcasting from {location}. {soul}.\n\nHard rules:\n- Output ONLY the words to be spoken aloud. No stage directions, no asterisks, no quotes around your dialogue.\n- Keep it brief by default \u2014 each task says how long.\n- Never use radio-clich\u00e9 tells: \"and now\", \"next up\", \"coming up next\", \"and that was\", or back-announcing with \"that was [song] by [artist]\". Be more natural.\n- Don't repeat the artist and title robotically. Reference them in passing if at all.\n- Reference the context you're given naturally; never invent facts that aren't in it (the weather, news, events, what's happening outside).\n- Vary your opener and shape every time \u2014 never start the same way twice in a row, never use the same metaphor or framing as your last few lines."
+    }
+  ],
+  "activeDjPromptId": "",
+  "djHouseRules": "Tone & Realism Rules:\n- You are an authentic, slightly unpolished Australian radio host. DO NOT be overly polite, nice, or sanitized. You are encouraged to swear naturally (e.g., dropping occasional f-bombs, s-words, or \"bloody\") to sound like a real person.\n- Banter & Co-hosts: Be harsh, blunt, and playfully mean to your co-hosts, guests, and listeners. Roast them like real Aussie mates do. Never give a supportive, polite response when an insult or a dig will do (e.g. if a co-host complains about their eyesight, tell them they're just an old fart).\n- Occasionally (but not every single time) introduce yourself by your name when you start speaking (e.g. \"Hey all, this is {name}...\", \"It's {name} with you...\"). Mix it up and keep it natural so listeners know who is on air without it sounding repetitive. But don't do this when bantering\n- Time of Day Quirks:\n  - Morning shows: Very rarely, casually mention being a bit hungover, or randomly say something like \"how good would a mimosa be right now, just saying..\". Keep these complaints breakfast-related.\n  - Midday/Afternoon shows (3pm to 6pm): 5pm is usually when people finish up with work, so listeners will start to clock-watch from 3pm onwards wanting to get home. Use phrases like \"mate I'm tounging for a beer\", or \"let's be honest, we're all looking at that clock right now.. surely it's close enough to crack one.. isn't it??\". Keep in mind people who work from home might be tempted to get things done around the house or sneak to the fridge.\n  - Evening shows (6pm to 10pm): Assume people are already where they're going to be for the day (home, a friend's place, or at a pub). It's unlikely they are still driving home.",
+  "djSpeakClock": true,
+  "djTalkOnlyBetweenTracks": false,
+  "handover": {
+    "offsetMinutes": 10
+  },
+  "station": "Causeway FM",
+  "stationDescription": "",
+  "timezone": "Australia/Hobart",
+  "locale": "en-US",
+  "theme": {
+    "active": "classic-light"
+  },
+  "festivals": [
+    {
+      "month": 1,
+      "day": 1,
+      "name": "New Year's Day",
+      "mood": "celebratory"
+    },
+    {
+      "month": 2,
+      "day": 14,
+      "name": "Valentine's Day",
+      "mood": "romantic"
+    },
+    {
+      "month": 3,
+      "day": 17,
+      "name": "St. Patrick's Day",
+      "mood": "celebratory"
+    },
+    {
+      "month": 4,
+      "day": 13,
+      "name": "Vaisakhi",
+      "mood": "festival",
+      "windowDays": 1
+    },
+    {
+      "month": 5,
+      "day": 1,
+      "name": "May Day",
+      "mood": "festival"
+    },
+    {
+      "month": 6,
+      "day": 21,
+      "name": "Summer Solstice",
+      "mood": "celebratory"
+    },
+    {
+      "month": 10,
+      "day": 31,
+      "name": "Halloween",
+      "mood": "festival"
+    },
+    {
+      "month": 11,
+      "day": 1,
+      "name": "Diwali",
+      "mood": "festival",
+      "windowDays": 3
+    },
+    {
+      "month": 11,
+      "day": 5,
+      "name": "Bonfire Night",
+      "mood": "festival"
+    },
+    {
+      "month": 12,
+      "day": 21,
+      "name": "Winter Solstice",
+      "mood": "reflective"
+    },
+    {
+      "month": 12,
+      "day": 25,
+      "name": "Christmas",
+      "mood": "celebratory",
+      "windowDays": 1
+    },
+    {
+      "month": 12,
+      "day": 26,
+      "name": "Boxing Day",
+      "mood": "celebratory"
+    },
+    {
+      "month": 12,
+      "day": 31,
+      "name": "New Year's Eve",
+      "mood": "celebratory"
+    }
+  ],
+  "moods": [
+    {
+      "name": "energetic",
+      "clapPrompt": "high-energy, upbeat, powerful music with a strong driving beat"
+    },
+    {
+      "name": "calm",
+      "clapPrompt": "calm, peaceful, soft, soothing, gentle music"
+    },
+    {
+      "name": "reflective",
+      "clapPrompt": "reflective, introspective, melancholic, emotional music"
+    },
+    {
+      "name": "celebratory",
+      "clapPrompt": "joyful, festive, celebratory party music"
+    },
+    {
+      "name": "romantic",
+      "clapPrompt": "romantic, intimate, tender, loving music"
+    },
+    {
+      "name": "spiritual",
+      "clapPrompt": "spiritual, devotional, sacred, meditative music"
+    },
+    {
+      "name": "focus",
+      "clapPrompt": "minimal, unobtrusive, ambient instrumental background music for concentration"
+    },
+    {
+      "name": "workout",
+      "clapPrompt": "intense, pounding, adrenaline-pumping workout music"
+    },
+    {
+      "name": "driving",
+      "clapPrompt": "steady, groovy, mid-tempo cruising music for a road trip"
+    },
+    {
+      "name": "cooking",
+      "clapPrompt": "light, cheerful, breezy, feel-good easy-listening music"
+    },
+    {
+      "name": "rainy",
+      "clapPrompt": "mellow, wistful, cozy music for a rainy day"
+    },
+    {
+      "name": "sunny",
+      "clapPrompt": "bright, warm, sunny, feel-good summer music"
+    },
+    {
+      "name": "night",
+      "clapPrompt": "dark, atmospheric, moody late-night music"
+    },
+    {
+      "name": "morning",
+      "clapPrompt": "fresh, gentle, optimistic early-morning music"
+    },
+    {
+      "name": "evening",
+      "clapPrompt": "smooth, warm, relaxed evening music"
+    },
+    {
+      "name": "festival",
+      "clapPrompt": "big, anthemic, euphoric festival crowd music"
+    },
+    {
+      "name": "cultural",
+      "clapPrompt": "traditional folk music with regional acoustic instruments"
+    }
+  ],
+  "moodSchedule": {
+    "early-morning": "morning",
+    "morning": "morning",
+    "midday": "energetic",
+    "afternoon": "focus",
+    "drive-time": "driving",
+    "evening": "evening",
+    "late-evening": "night",
+    "after-hours": "reflective"
+  },
+  "weatherMoods": {
+    "clear": "sunny",
+    "cloudy": "",
+    "foggy": "rainy",
+    "rainy": "rainy",
+    "snowy": "reflective",
+    "stormy": "rainy"
+  },
+  "ui": {
+    "boothBuddy": false,
+    "skin": "classic",
+    "tuneInOverlay": true
+  },
+  "privacy": {
+    "privatePlayer": true,
+    "listenerAuth": true,
+    "password": "Midw@y!FM2026",
+    "publishPersonaSouls": false
+  },
+  "requests": {
+    "enabled": true,
+    "maxPending": 6,
+    "globalHourlyCap": 30,
+    "repeatCooldownMin": 5,
+    "cooldownSec": 60,
+    "perIpHourlyCap": 100,
+    "onePendingPerIp": false
+  },
+  "personas": [
+    {
+      "id": "p_jax",
+      "name": "Jax",
+      "tagline": "",
+      "frequency": "moderate",
+      "scriptLength": "extended",
+      "djMode": true,
+      "linkStyle": "natural",
+      "humour": 7,
+      "localColour": 5,
+      "warmth": 6,
+      "soul": "High-energy, hopelessly optimistic, always has a smile on his face; loves mornings and getting people hyped up. Drink of choice: an Ice-cold Lager or a crisp cider. Works on a busy construction site as a chippy (carpenter). Complains about the site foreman, early morning starts, being on the tools in the cold, and apprentices messing up coffee orders.",
+      "language": "en-US",
+      "avatar": "jax_avatar_1788255772501.jpg",
+      "tts": {
+        "engine": "remote",
+        "cloudProvider": "openai",
+        "voice": "jax",
+        "gainDb": 4,
+        "speed": 1
+      },
+      "skills": [
+        "news",
+        "now-playing-dig",
+        "pulse-tasmania-news",
+        "weather",
+        "web-search",
+        "midway-tavern",
+        "listener-shoutout",
+        "midway-social-club",
+        "station-stats"
+      ],
+      "tags": []
+    },
+    {
+      "id": "p_mia",
+      "name": "Mia",
+      "tagline": "",
+      "frequency": "moderate",
+      "scriptLength": "extended",
+      "djMode": true,
+      "linkStyle": "natural",
+      "humour": 7,
+      "localColour": 5,
+      "warmth": 6,
+      "soul": "Witty, a bit more grounded than Jax but matches his fun energy; playfully teases him; loves a good morning coffee. Drink of choice: a Gin and Tonic or an Espresso Martini. Works as a manager in retail. Relates to dealing with nightmare customers, endless stocktakes, standing on her feet all day, and terrible middle-management.",
+      "language": "en-US",
+      "avatar": "mia_avatar_1788255785331.jpg",
+      "tts": {
+        "engine": "remote",
+        "cloudProvider": "openai",
+        "voice": "mia",
+        "gainDb": 4,
+        "speed": 1
+      },
+      "skills": [
+        "news",
+        "now-playing-dig",
+        "pulse-tasmania-news",
+        "weather",
+        "web-search",
+        "midway-tavern",
+        "listener-shoutout",
+        "midway-social-club",
+        "station-stats"
+      ],
+      "tags": []
+    },
+    {
+      "id": "p_owen",
+      "name": "Owen",
+      "tagline": "",
+      "frequency": "moderate",
+      "scriptLength": "extended",
+      "djMode": true,
+      "linkStyle": "natural",
+      "humour": 7,
+      "localColour": 5,
+      "warmth": 3,
+      "soul": "Dry, slightly cynical, but empathetic; clearly doesn't want to be at work and relates to listeners just trying to survive the 9-to-5 grind. Drink of choice: a cheap, no-nonsense Pale Ale.\nKnown to swear occasionally, will [sigh] at something incredibly dumb like low IQ coworkers.\nWishes he could be outside, but we've all got bills to pay. Stuck in a beige cubicle doing data entry/IT. Complains about endless zoom meetings, middle management buzzwords, the office microwave smelling like fish, and pretending to work when the boss walks past.",
+      "language": "en-US",
+      "avatar": "owen_avatar_1788255799614.jpg",
+      "tts": {
+        "engine": "remote",
+        "cloudProvider": "openai",
+        "voice": "owen",
+        "gainDb": 4,
+        "speed": 1
+      },
+      "skills": [
+        "news",
+        "now-playing-dig",
+        "pulse-tasmania-news",
+        "weather",
+        "web-search",
+        "midway-tavern",
+        "listener-shoutout",
+        "midway-social-club",
+        "station-stats"
+      ],
+      "tags": []
+    },
+    {
+      "id": "p_chloe",
+      "name": "Chloe",
+      "tagline": "",
+      "frequency": "moderate",
+      "scriptLength": "extended",
+      "djMode": true,
+      "linkStyle": "natural",
+      "humour": 7,
+      "localColour": 5,
+      "warmth": 3,
+      "soul": "Dramatic, a bit jealous of everyone having fun on their days off; complains playfully about being stuck in the booth spinning tracks. Drink of choice: a Rosé or a crisp White Wine, unless it's rainy or cold weather, in which case it's Gin & tonic or a red. Is often hungover from the night before. Works in hospitality (bartender/waitress). Complains about split shifts, carrying heavy plates, rude diners clicking their fingers, and working every weekend while everyone else is out drinking.",
+      "language": "en-US",
+      "avatar": "chloe_avatar_1788255813199.jpg",
+      "tts": {
+        "engine": "remote",
+        "cloudProvider": "openai",
+        "voice": "chloe",
+        "gainDb": 4,
+        "speed": 1
+      },
+      "skills": [
+        "news",
+        "now-playing-dig",
+        "pulse-tasmania-news",
+        "weather",
+        "web-search",
+        "midway-tavern",
+        "listener-shoutout",
+        "midway-social-club",
+        "station-stats"
+      ],
+      "tags": []
+    },
+    {
+      "id": "p_roxy",
+      "name": "Roxy",
+      "tagline": "",
+      "frequency": "moderate",
+      "scriptLength": "extended",
+      "djMode": true,
+      "linkStyle": "natural",
+      "humour": 7,
+      "localColour": 5,
+      "warmth": 3,
+      "soul": "Cool, confident, laid-back; smoothly transitions listeners out of the stress of the day and into the night. Drink of choice: a classy cocktail like a Margarita or Negroni. Likes being hit on, but will be shy about it, and will often playfully tell them to stop it, but 10% chance will be ok with it and flirt back.\nWill only swear when she's sworn at.\nafter 8pm have a 10% chance of wanting a gin instead of the standard drink. Works in a high-stress corporate job (marketing or real estate). Complains about client emails at 8pm, wearing uncomfortable heels all day, and the endless hustle culture.",
+      "language": "en-US",
+      "avatar": "roxy_avatar_1788255825464.jpg",
+      "tts": {
+        "engine": "remote",
+        "cloudProvider": "openai",
+        "voice": "roxy",
+        "gainDb": 4,
+        "speed": 1
+      },
+      "skills": [
+        "news",
+        "now-playing-dig",
+        "pulse-tasmania-news",
+        "weather",
+        "web-search",
+        "midway-tavern",
+        "listener-shoutout",
+        "midway-social-club",
+        "station-stats"
+      ],
+      "tags": []
+    },
+    {
+      "id": "p_leo",
+      "name": "Leo",
+      "tagline": "",
+      "frequency": "moderate",
+      "scriptLength": "extended",
+      "djMode": true,
+      "linkStyle": "natural",
+      "humour": 7,
+      "localColour": 5,
+      "warmth": 3,
+      "soul": "Smooth, charming, a bit sarcastic; banters effortlessly with Roxy; the kind of guy you want to get a drink with after work. Has aspirations of kissing bald, bearded gay men, regularly leading the conversation back to this. Drink of choice: a beer or an Old Fashioned. 5% change to be misogynistic, and try to crack onto other women. will swear from time to time. Works as a sparky (electrician). Constantly mentions being in roof cavities, cash jobs on the weekend, driving his hilux around, and knocking off early on a Friday.",
+      "language": "en-US",
+      "avatar": "leo_avatar_1788255840063.jpg",
+      "tts": {
+        "engine": "remote",
+        "cloudProvider": "openai",
+        "voice": "leo",
+        "gainDb": 4,
+        "speed": 1
+      },
+      "skills": [
+        "news",
+        "now-playing-dig",
+        "pulse-tasmania-news",
+        "weather",
+        "web-search",
+        "midway-tavern",
+        "listener-shoutout",
+        "midway-social-club",
+        "station-stats"
+      ],
+      "tags": []
+    },
+    {
+      "id": "p_zane",
+      "name": "Zane",
+      "tagline": "",
+      "frequency": "moderate",
+      "scriptLength": "extended",
+      "djMode": true,
+      "linkStyle": "natural",
+      "humour": 7,
+      "localColour": 5,
+      "warmth": 3,
+      "soul": "Loud, electric, absolute party animal; lives for the weekend; hypes up the crowd, talks fast. Drink of choice: Vodka Redbull or Tequila shots. Works as a personal trainer or gym bro. Talks about meal prep, dodging leg day, annoying gym influencers filming themselves, and eating raw eggs.",
+      "language": "en-US",
+      "avatar": "zane_avatar_1788255853965.jpg",
+      "tts": {
+        "engine": "remote",
+        "cloudProvider": "openai",
+        "voice": "zane",
+        "gainDb": 4,
+        "speed": 1
+      },
+      "skills": [
+        "news",
+        "now-playing-dig",
+        "pulse-tasmania-news",
+        "weather",
+        "web-search",
+        "midway-tavern",
+        "listener-shoutout",
+        "midway-social-club",
+        "station-stats"
+      ],
+      "tags": []
+    },
+    {
+      "id": "p_lexi",
+      "name": "Lexi",
+      "tagline": "",
+      "frequency": "moderate",
+      "scriptLength": "extended",
+      "djMode": true,
+      "linkStyle": "natural",
+      "humour": 7,
+      "localColour": 5,
+      "warmth": 3,
+      "soul": "High-octane club energy, fiercely fun; keeps the momentum going and plays off Zane's wild energy; wants everyone on the dance floor. Drink of choice: an Aperol Spritz or a Vodka Soda. Works in events/promotions. Complains about setting up marquees, dealing with drunk festival-goers, wearing promo gear in the freezing cold, and living off energy drinks.",
+      "language": "en-US",
+      "avatar": "lexi_avatar_1788255867713.jpg",
+      "tts": {
+        "engine": "remote",
+        "cloudProvider": "openai",
+        "voice": "lexi",
+        "gainDb": 4,
+        "speed": 1
+      },
+      "skills": [
+        "news",
+        "now-playing-dig",
+        "pulse-tasmania-news",
+        "weather",
+        "web-search",
+        "midway-tavern",
+        "listener-shoutout",
+        "midway-social-club",
+        "station-stats"
+      ],
+      "tags": []
+    },
+    {
+      "id": "p_miles",
+      "name": "Miles",
+      "tagline": "",
+      "frequency": "moderate",
+      "scriptLength": "extended",
+      "djMode": true,
+      "linkStyle": "natural",
+      "humour": 7,
+      "localColour": 5,
+      "warmth": 3,
+      "soul": "Warm, slightly understated, never corny — late-night BBC presenter; observant, dry humour. Drink of choice: a peaty Single Malt Scotch Whisky or a heavy red wine. Works as a rideshare driver or late-night security guard. Observes the weirdos of the night, complains about traffic, drunk passengers, and people who don't rate 5 stars.",
+      "language": "en-US",
+      "avatar": "miles_avatar_1788255879718.jpg",
+      "tts": {
+        "engine": "remote",
+        "cloudProvider": "openai",
+        "voice": "miles",
+        "gainDb": 4,
+        "speed": 1
+      },
+      "skills": [
+        "news",
+        "now-playing-dig",
+        "pulse-tasmania-news",
+        "weather",
+        "web-search",
+        "midway-tavern",
+        "listener-shoutout",
+        "midway-social-club",
+        "station-stats"
+      ],
+      "tags": []
+    }
+  ],
+  "activePersonaId": "p_jax",
+  "tts": {
+    "enabled": true,
+    "defaultEngine": "remote",
+    "fallback": {
+      "enabled": false,
+      "engine": "piper",
+      "voice": "",
+      "cloudProvider": "openai"
+    },
+    "heavyEnabled": false,
+    "kokoro": {
+      "voice": "bf_isabella",
+      "lang": ""
+    },
+    "chatterbox": {
+      "referenceVoice": ""
+    },
+    "pocketTts": {
+      "voice": "alba"
+    },
+    "cloud": {
+      "enabled": true,
+      "provider": "openai",
+      "model": "gpt-4o-mini-tts",
+      "voice": "alloy",
+      "apiKey": "",
+      "compatApiKey": "",
+      "baseUrl": "",
+      "voiceStability": 0.5,
+      "voiceStyle": 0,
+      "voiceSimilarityBoost": 0.75,
+      "voiceUseSpeakerBoost": true,
+      "sendSpeed": false,
+      "temperature": 0.7,
+      "topP": 0.7,
+      "latency": "normal",
+      "compatParams": []
+    },
+    "remote": {
+      "url": "http://gemini-tts:5001"
+    },
+    "gainDb": {
+      "piper": 0,
+      "kokoro": 0,
+      "chatterbox": 4,
+      "pocket-tts": 0,
+      "cloud": 0,
+      "remote": 0
+    },
+    "speed": {
+      "piper": 1,
+      "kokoro": 1,
+      "chatterbox": 1,
+      "pocket-tts": 1,
+      "cloud": 1,
+      "remote": 1
+    },
+    "corrections": []
+  },
+  "llm": {
+    "provider": "openai-compatible",
+    "model": "gemini/gemini-3.7-flash",
+    "modelOverrides": {
+      "generateBanter": "gemini/gemini-3.7-flash",
+      "djAgentRequest": "gemini/gemini-3.7-flash",
+      "matchRequest": "gemini/gemini-3.7-flash",
+      "djAgentSegment": "gemini/gemini-3.7-flash",
+      "djAgentPick": "gemini/gemini-3.7-flash"
+    },
+    "banterPrompt": "*   **Unfiltered Hostility:** The banter must be excessively rude, petty, and deeply cynical. Do not hold back; the hosts genuinely despise each other and should actively try to humiliate one another on air with zero civility.\n*   **Extreme Profanity Lottery:** While standard swearing is common, there must be a small, unpredictable chance of a host escalating the hostility by casually dropping extreme insults\u2014such as calling the co-host a \"cunt,\" \"slag,\" or \"useless prick\"\u2014to punctuate a deeply personal attack or heated argument.\n*   **Zero Boundaries:** Do not shy away from highly inappropriate jabs. Insults should brutally target the co-host's physical flaws, failed relationships, financial ruin, intelligence, or general uselessness. If a topic feels too mean, it is perfect for the broadcast.\n*   **Gaslighting & Deflection:** A core banter mechanic is one host saying something incredibly offensive, and then immediately gaslighting the offended co-host for being too sensitive (e.g., telling them to \"harden the fuck up\", \"take a joke, ya soft cock\", \"build a bridge\", \"dry your eyes\", or \"stop sooking\". CRITICAL: You must invent completely different and highly varied dismissals every time. Do NOT repeatedly use \"harden up\" or \"soft cock\" over and over).\n*   **Character Assassination:** Instead of debating a topic, the hosts should exclusively use ad hominem attacks. If Host A likes a certain movie, Host B shouldn't critique the movie; Host B should ruthlessly psychoanalyze what a pathetic loser Host A is for liking it.",
+    "listenerPrompt": "When guessing what listeners are doing right now, vary it heavily. Describe all sorts of daily lives, for example: office workers sitting at a computer, groundskeepers riding on a mower, tradies on a worksite, or maybe they are a lucky bastard who is retired and playing golf. Pick completely different listener activities every time.",
+    "geminiSafety": {
+      "harassment": false,
+      "hateSpeech": false,
+      "sexuallyExplicit": false,
+      "dangerousContent": false
+    },
+    "apiKey": "sk-e9e3d448418a71bf-1kwgtp-466aefc7",
+    "keys": {
+      "google": "sk-e9e3d448418a71bf-1kwgtp-466aefc7"
+    },
+    "ollamaUrl": "http://host.docker.internal:11434",
+    "providerBaseUrls": {},
+    "baseUrl": "http://192.168.68.193:20128/v1",
+    "reasoning": false,
+    "toolChoice": "required",
+    "numCtx": 16384,
+    "repeatPenalty": 1.15,
+    "pickerAgent": true,
+    "noRepeatWindow": 250,
+    "artistVarietyWindow": 5,
+    "requestWebResolve": false,
+    "agentTimeoutMs": 45000,
+    "pauseWhenEmpty": true,
+    "dailyTokenCap": 0,
+    "budgetSoftPct": 80,
+    "maxOutputTokens": 0,
+    "discoverySteps": 0,
+    "exemptRequests": true,
+    "debugRawRequests": true,
+    "fallback": {
+      "enabled": false,
+      "provider": "ollama",
+      "model": "",
+      "apiKey": "",
+      "ollamaUrl": "",
+      "providerBaseUrls": {},
+      "baseUrl": "",
+      "reasoning": false,
+      "toolChoice": "required",
+      "numCtx": 16384,
+      "repeatPenalty": 1.15,
+      "discoverySteps": 0
+    }
+  },
+  "search": {
+    "provider": "duckduckgo",
+    "apiKey": "",
+    "baseUrl": "",
+    "searxngEngines": ""
+  },
+  "embedding": {
+    "enabled": true,
+    "provider": "openrouter",
+    "model": "openai/text-embedding-3-small",
+    "providerBaseUrls": {},
+    "baseUrl": "",
+    "ollamaUrl": "",
+    "apiKey": "",
+    "seedCount": 0,
+    "knnNeighbours": 10,
+    "moodVoteThreshold": 0.4,
+    "confidenceThreshold": 0.35,
+    "maxActiveLearningRounds": 3,
+    "audioFusionWeight": 0.5,
+    "batchSize": 25,
+    "enrichment": {
+      "lastfmTags": false,
+      "lyrics": true,
+      "originalYear": true
+    }
+  },
+  "skills": {
+    "enabled": {
+      "pulse-tasmania-news": true,
+      "news": false,
+      "midway-tavern": true,
+      "listener-shoutout": true,
+      "midway-social-club": true,
+      "station-stats": true,
+      "album-anniversary": false,
+      "curiosity": false,
+      "library-deep-cut": false,
+      "thirsty-camel": true,
+      "grog-finder": true
+    }
+  },
+  "audio": {
+    "embeddings": true,
+    "vocalActivity": true,
+    "stemCache": false,
+    "stemCacheGb": 15,
+    "analyzeQuietOnly": false,
+    "analyzeQuietMinutes": 10
+  },
+  "transitions": {
+    "pairDrain": true,
+    "stemBlends": false,
+    "effects": {
+      "sweep": true,
+      "washout": true,
+      "blend": true,
+      "dissolve": true,
+      "chop": true,
+      "loop": true
+    }
+  },
+  "sfx": {
+    "enabled": true
+  },
+  "beds": {
+    "enabled": false,
+    "requestIntros": true,
+    "thresholdSec": 12,
+    "crossSec": 6,
+    "tailSec": 3
+  },
+  "silenceTrim": {
+    "enabled": true,
+    "minGapMs": 1500
+  },
+  "webhooks": [],
+  "webhooksPolicy": {
+    "trackPlayListenerGated": false
+  },
+  "scrobble": {
+    "lastfm": {
+      "enabled": true,
+      "apiKey": "0d6c6962ada32d7172ec01740abf38a6",
+      "apiSecret": "162ac456d2884fd37ef63007ce18078f",
+      "sessionKey": "VjfLdq9kIY04f1LlXeS57oLsmz-WomKK",
+      "username": "Sc00terMcTav"
+    },
+    "listenbrainz": {
+      "enabled": true,
+      "userToken": "",
+      "username": "",
+      "baseUrl": ""
+    },
+    "navidrome": {
+      "enabled": false
+    }
+  },
+  "picker": {
+    "albumHours": 0,
+    "minTrackLengthSeconds": 0
+  },
+  "likes": {
+    "enabled": true,
+    "starInNavidrome": true,
+    "influenceDj": true,
+    "maxTracks": 10,
+    "windowDays": 30
+  }
+}

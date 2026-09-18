@@ -919,6 +919,26 @@ export async function load() {
         stored.llm?.modelOverrides && typeof stored.llm.modelOverrides === 'object'
           ? { ...stored.llm.modelOverrides }
           : DEFAULTS.llm.modelOverrides,
+      banterPrompt: typeof stored.llm?.banterPrompt === 'string'
+        ? stored.llm.banterPrompt.trim()
+        : DEFAULTS.llm.banterPrompt,
+      listenerPrompt: typeof stored.llm?.listenerPrompt === 'string'
+        ? stored.llm.listenerPrompt.trim()
+        : DEFAULTS.llm.listenerPrompt,
+      geminiSafety: {
+        harassment: typeof stored.llm?.geminiSafety?.harassment === 'boolean'
+          ? stored.llm.geminiSafety.harassment
+          : DEFAULTS.llm.geminiSafety.harassment,
+        hateSpeech: typeof stored.llm?.geminiSafety?.hateSpeech === 'boolean'
+          ? stored.llm.geminiSafety.hateSpeech
+          : DEFAULTS.llm.geminiSafety.hateSpeech,
+        sexuallyExplicit: typeof stored.llm?.geminiSafety?.sexuallyExplicit === 'boolean'
+          ? stored.llm.geminiSafety.sexuallyExplicit
+          : DEFAULTS.llm.geminiSafety.sexuallyExplicit,
+        dangerousContent: typeof stored.llm?.geminiSafety?.dangerousContent === 'boolean'
+          ? stored.llm.geminiSafety.dangerousContent
+          : DEFAULTS.llm.geminiSafety.dangerousContent,
+      },
       // Legacy single slot is migrated into `keys` below, then cleared — there
       // is exactly one source of truth for inline keys (issue #657).
       apiKey: '',
@@ -1930,6 +1950,20 @@ export async function update(patch) {
     }
     if (l.pickerAgent !== undefined) {
       next.llm.pickerAgent = !!l.pickerAgent;
+    }
+    if (l.banterPrompt !== undefined) {
+      next.llm.banterPrompt = String(l.banterPrompt).trim().slice(0, 10000);
+    }
+    if (l.listenerPrompt !== undefined) {
+      next.llm.listenerPrompt = String(l.listenerPrompt).trim().slice(0, 10000);
+    }
+    if (l.geminiSafety !== undefined && typeof l.geminiSafety === 'object') {
+      next.llm.geminiSafety = {
+        harassment: !!l.geminiSafety.harassment,
+        hateSpeech: !!l.geminiSafety.hateSpeech,
+        sexuallyExplicit: !!l.geminiSafety.sexuallyExplicit,
+        dangerousContent: !!l.geminiSafety.dangerousContent,
+      };
     }
     if (l.noRepeatWindow !== undefined) {
       next.llm.noRepeatWindow = clampNoRepeatWindow(Number(l.noRepeatWindow), next.llm.noRepeatWindow);

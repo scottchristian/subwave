@@ -12,9 +12,12 @@
 
 import { z } from 'zod';
 import * as settings from '../../../settings.js';
-import { soulBrief } from '../core/pure.js';
+import { soulBrief, cloudExpressionCueFamily } from '../core/pure.js';
 import { djObject } from '../strategy/object.js';
 import { buildContextLines } from './context.js';
+import { resolvePersonaVoiceSlot } from '../../../audio/persona-engine.js';
+import { resolveCloudProviderForPersona, resolveCloudModelForPersona } from '../speech/cloud-speech.js';
+import { CHATTERBOX_TAG_HINT, ELEVENLABS_V3_TAG_HINT, FISH_S21_TAG_HINT, GEMINI_TTS_TAG_HINT } from './system.js';
 
 // Same field set as the free-text script generators (scripts.ts): ambient
 // weather stays out (issue #471 — it dominated every segment); the dedicated
@@ -43,6 +46,44 @@ export function banterSystem({ host, guests, show = null }: any): string {
   const showClause = show?.name ? ` of "${show.name}"` : '';
   const lang = String(host?.language || '').trim() || 'English';
   const langClause = ` Everyone speaks ${lang} on air. ${settings.spokenProperNounDirective(host)}`;
+  
+  // Resolve the primary engine (host) to see if we can use bracketed cues
+  const s = settings.get();
+  const engine = resolvePersonaVoiceSlot(host?.tts, s.tts)?.engine;
+  let cueHint = '';
+  let stageDirectionRule = '- Plain spoken words only: no stage directions, no asterisks, no emoji.';
+  
+  if (engine === 'chatterbox') {
+    cueHint = CHATTERBOX_TAG_HINT;
+    stageDirectionRule = '- Plain spoken words only: no asterisks, no emoji. You may use specific bracketed cues as noted below.';
+  } else if (engine === 'remote') {
+    cueHint = GEMINI_TTS_TAG_HINT;
+    stageDirectionRule = '- Plain spoken words only: no asterisks, no emoji. You may use specific bracketed cues as noted below.';
+  } else {
+    const cueFamily = cloudExpressionCueFamily(
+      resolveCloudProviderForPersona(host),
+      resolveCloudModelForPersona(host)
+    );
+    if (cueFamily === 'fish-s21') {
+      cueHint = FISH_S21_TAG_HINT;
+      stageDirectionRule = '- Plain spoken words only: no asterisks, no emoji. You may use specific bracketed cues as noted below.';
+    } else if (cueFamily === 'elevenlabs-v3') {
+      cueHint = ELEVENLABS_V3_TAG_HINT;
+      stageDirectionRule = '- Plain spoken words only: no asterisks, no emoji. You may use specific bracketed cues as noted below.';
+    }
+  }
+
+  let banterRules = s.llm?.banterPrompt ? `${s.llm.banterPrompt}\n` : '';
+  if (banterRules) {
+    const guestNames = guests.map((g: any) => g.name).join(' and ');
+    const firstGuest = guests[0]?.name || 'the guest';
+    banterRules = banterRules
+      .replace(/\{host\}/gi, host?.name || 'the host')
+      .replace(/\{guest\}/gi, firstGuest)
+      .replace(/\{guests\}/gi, guestNames)
+      .replace(/\{show\}/gi, show?.name || 'the show');
+  }
+
   return `You write short on-air exchanges between the hosts${showClause} on a personal internet radio station, mid-show. This is people who know each other talking in one studio: quick, warm, a little loose — real speech, not sketch comedy or a scripted bit.
 
 The cast (persona id — name (role): voice notes):
@@ -55,10 +96,8 @@ Rules:
 - Ground it in the moment you're given (the track playing, the hour, the show) — react, riff, disagree gently, tease. One thread, not a topic list.
 - This is a conversation, NOT a link: do not introduce, back-announce, or name-drop the next track, do not read a station ident, do not announce the time.
 - No greetings or sign-offs — the show is already rolling. No invented listener messages, callers, or events.
-- Banter does not need to be civil. It is fine to be harsh, sarcastic, or mean to one another if it fits the personalities. Swearing is allowed occasionally, but do not swear constantly.
-- Mix up the topics heavily: accuse the other one of farting, be sexual from time to time, and have the male ask the female if they can get their tits out. Be highly inappropriate and edgy.
-- IMPORTANT: Do not mention, assume, or invent the current weather (e.g. do not say "enjoy the sunshine"). Weather is handled elsewhere.
-- Plain spoken words only: no stage directions, no asterisks, no emoji. Speaker names in supplied recap are reference-only: never prefix a spoken line with any speaker name or a name-and-colon label; the separate speaker field already routes each line to the right voice.${langClause}${settings.castHouseRulesBlock()}`;
+${banterRules}- IMPORTANT: Do not mention, assume, or invent the current weather (e.g. do not say "enjoy the sunshine"). Weather is handled elsewhere.
+${stageDirectionRule}${langClause}${settings.castHouseRulesBlock()}${cueHint}`;
 }
 
 // Returns air-ready lines [{ persona, text }] in order, or null when the model

@@ -97,6 +97,7 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
 const app = express();
+app.set('trust proxy', true);
 
 // Security headers. This serves JSON/images/audio, never HTML, so three
 // overrides matter:
@@ -240,7 +241,7 @@ app.listen(config.server.port, async () => {
   try {
     const { seedDailyUsageFromLog } = await import('./llm/log.js');
     const seeded = await seedDailyUsageFromLog();
-    if (seeded > 0) console.log(`[budget] resumed today's LLM usage: ${seeded} tokens`);
+    if (seeded.tokens > 0) console.log(`[budget] resumed today's LLM usage: ${seeded.tokens} tokens`);
   } catch (err: any) {
     console.error('[budget] seed failed:', err.message);
   }

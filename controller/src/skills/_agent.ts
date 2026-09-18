@@ -422,6 +422,19 @@ async function runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }) {
     };
   }
   lastUnavailable.delete(cap.kind);
+
+  // Short-circuit the LLM rewrite when the tool returns a pre-written `script`.
+  // Skills like grog-finder build a verbatim script (including [voice:] tags and
+  // directives) that must reach TTS untouched. Passing it through djObject lets
+  // the LLM paraphrase it and strip those tags. When `data.script` is present
+  // and `data.available` is true, use it directly as the aired text.
+  if (data && typeof (data as any).script === 'string' && (data as any).available === true) {
+    const verbatimText = ((data as any).script as string).trim();
+    if (verbatimText) {
+      return { seg: { kind: cap.kind, text: verbatimText, sfx: null }, exchange: null, reason: 'verbatim script from tool' };
+    }
+  }
+
   const recentCuriosity = cap.kind === 'curiosity' ? recentAiredCuriosity() : undefined;
   const out = await deadlinedSegmentObject({
     system: simpleSystem(speaker, cap, freq, sfxCatalog),
@@ -760,6 +773,20 @@ export async function runCapability(
     const data = await fetchSegmentData(cap, ctx, segmentState);
     const blocked = standDownReason(cap, data);
     if (blocked) return standDown(blocked);
+    // Short-circuit when the tool returns a pre-written `script` (e.g. grog-finder).
+    // The script must reach TTS verbatim — passing it through the LLM causes
+    // rewriting that strips [voice:] tags and directive text.
+    if (data && typeof (data as any).script === 'string' && (data as any).available === true) {
+      const verbatimText = ((data as any).script as string).trim();
+      if (verbatimText) {
+        lastFired.set(cap.kind, Date.now());
+        segmentState.lastAnySegment = Date.now();
+        await queue.announce(verbatimText, cap.kind, persona
+          ? { persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name } }
+          : {});
+        return { aired: true, text: verbatimText, reason: 'verbatim script from tool' };
+      }
+    }
     object = await deadlinedSegmentObject({
       system: forcedSystem(speaker, cap, sfxCatalog, { mayAbstain }),
       prompt: situation + (data && !data.error ? dataBlock(data) : ''),

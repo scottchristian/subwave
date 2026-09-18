@@ -17,10 +17,10 @@ import { join } from 'node:path';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
+import { addPeakListeners, peakListenersToday } from '../llm/internal/telemetry/budget.js';
 
 let lastCount: number | null = null;        // null = unknown (not yet polled, or this poll failed)
 let lastGoodCount: number | null = null;    // last count actually read from Icecast; null until the first success
-let peakSeen = 0;                            // running max of the deduped count this process run
 let consecutiveStatusFailures = 0;          // resets to 0 on every successful poll
 
 // Cached stream status from the same poll as lastCount. Served to /now-playing
@@ -156,14 +156,16 @@ async function pollCount(persistHistory: boolean) {
 
     lastCount = current;
     lastGoodCount = current;
-    peakSeen = Math.max(peakSeen, current);
-    lastStatus = { online, listeners: { current, peak: peakSeen }, bitrate, sampleRate, channels };
+    addPeakListeners(current);
+    const currentPeak = peakListenersToday();
+    lastStatus = { online, listeners: { current, peak: currentPeak }, bitrate, sampleRate, channels };
     consecutiveStatusFailures = 0;
   } catch {
     lastCount = null;
     // A transient fetch failure means "unknown", not offline (#461).
     consecutiveStatusFailures += 1;
-    lastStatus = statusAfterFailure(lastStatus, consecutiveStatusFailures, STALE_STATUS_LIMIT, peakSeen);
+    const currentPeak = peakListenersToday();
+    lastStatus = statusAfterFailure(lastStatus, consecutiveStatusFailures, STALE_STATUS_LIMIT, currentPeak);
   }
   // One row per wall-clock minute. Null samples are skipped so a stats outage
   // leaves a gap rather than a misleading "0 listeners" stripe.

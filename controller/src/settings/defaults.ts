@@ -370,6 +370,14 @@ export const DEFAULTS = {
   llm: {
     provider: 'ollama',
     model: '',
+    banterPrompt: '- Banter does not need to be civil. It is fine to be harsh, sarcastic, or mean to one another if it fits the personalities. Swearing is allowed occasionally, but do not swear constantly.\n- Mix up the topics heavily: accuse the other one of farting, be sexual from time to time, and have the male ask the female if they can get their tits out. Be highly inappropriate and edgy.',
+    listenerPrompt: 'When guessing what listeners are doing right now, vary it heavily. Describe all sorts of daily lives: office workers sitting at a computer, groundskeepers riding on a mower, tradies on a worksite, or maybe they are a lucky bastard who is retired and playing golf. Pick completely different listener activities every time.',
+    geminiSafety: {
+      harassment: false,
+      hateSpeech: false,
+      sexuallyExplicit: false,
+      dangerousContent: false,
+    },
     modelOverrides: {} as Record<string, string>,
     // Legacy single inline-key slot, superseded by `keys`. Always '' after
     // load(); resolution reads `keys`, never this.
