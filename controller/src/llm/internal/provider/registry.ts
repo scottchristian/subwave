@@ -151,8 +151,9 @@ export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch, forceNoT
         console.log(`[LLM Fetch] ${url} returned ${res.status} in ${ms}ms`);
         if (reqModel) {
           try {
+            let text = '';
             const clone = res.clone();
-            const text = await clone.text();
+            text = await clone.text();
             const json = JSON.parse(text);
             // Strip markdown fences from tool_call arguments. Certain models
             // (e.g. Nemotron via Free_Shit) occasionally emit their tool call
@@ -193,7 +194,7 @@ export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch, forceNoT
                             console.log(`[LLM Fetch] failed to extract valid JSON from prose. Raw was: ${JSON.stringify(raw)}`);
                           }
                         } else {
-                          const reqTools = body.tools || [];
+                          const reqTools = parsedBodyForLog?.tools || [];
                           const toolSchema = reqTools.find((t: any) => t?.function?.name === tc.function?.name);
                           const props = toolSchema?.function?.parameters?.properties;
                           
@@ -309,7 +310,7 @@ export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch, forceNoT
             }
           } catch (e) {
             // Not JSON or parse error on the main response envelope, just return original
-            console.log(`[LLM Fetch] FATAL: model returned invalid JSON wrapper. Raw body: ${text.substring(0, 500)}`);
+            console.log(`[LLM Fetch] FATAL: model returned invalid JSON wrapper. Raw body could not be parsed.`);
           }
         }
       }

@@ -781,10 +781,10 @@ export async function runCapability(
       if (verbatimText) {
         lastFired.set(cap.kind, Date.now());
         segmentState.lastAnySegment = Date.now();
-        await queue.announce(verbatimText, cap.kind, persona
+        const result = await queue.announce(verbatimText, cap.kind, persona
           ? { persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name } }
           : {});
-        return { aired: true, text: verbatimText, reason: 'verbatim script from tool' };
+        return { aired: true, queued: result.accepted, deferred: result.deferred, text: verbatimText, reason: 'verbatim script from tool' };
       }
     }
     object = await deadlinedSegmentObject({
