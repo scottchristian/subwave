@@ -27,10 +27,7 @@ import * as showBoundary from './show-boundary.js';
 import * as blocklist from '../music/blocklist.js';
 import { artistRootKey, trackKey, type CandidateLike } from '../music/recency.js';
 import { albumKeyFor } from '../music/album-facts.js';
-<<<<<<< HEAD
 import { speak, speakExchange, voiceGainDb } from '../audio/tts.js';
-=======
-import { speak, voiceGainDb } from '../audio/tts.js';
 import {
   writeSilentWav,
   discardSilentWav,
@@ -40,7 +37,6 @@ import {
   PAUSE_TALK_DIR,
 } from '../audio/wav-silence.js';
 import { normalizeForDisplay } from '../audio/speech-text.js';
->>>>>>> 8f4c74dafa5d730bd3ca3763106e0c7462c38b5e
 import * as djAgent from './dj-agent.js';
 import * as programme from './programme.js';
 import * as sfx from './sfx.js';
