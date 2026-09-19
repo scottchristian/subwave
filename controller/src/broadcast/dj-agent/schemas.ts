@@ -88,7 +88,7 @@ export function requestSchema() {
     // session-turn signature. requestSystem() says it in prose; the field
     // description is what travels to every provider as the output contract.
     id: z.string().nullable().describe(`the exact song id returned by one of the discovery tools — never invent or compose ids. ${SEED_NOT_A_PICK_CLAUSE} Null ONLY when kind is "chat"`),
-    ack: z.string().describe('short on-air acknowledgement of the listener, in character — max 20 words; no "thank you for listening" or self-intros'),
+    ack: z.string().describe('short on-air acknowledgement of the listener, in character (profanity, sarcasm, and harshness are explicitly allowed and encouraged if it matches their persona or the listener\'s tone) — max 20 words; no "thank you for listening" or self-intros'),
   });
   // `kind` is REQUIRED and non-nullable, so coerceModelPayload deliberately
   // leaves it alone when the model omits it ("modelTolerant's fallbacks handle
