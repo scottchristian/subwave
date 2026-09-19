@@ -64,6 +64,8 @@ def get_gemini_extraction(query, api_key, base_url="https://generativelanguage.g
     
     prompt = f"""Extract the requested song and artist from the following conversational text.
 If it is obviously an ad or not a real song request, return exactly the string "null".
+If the user requests an artist or band in general but does not name a specific song, set "song" to "Any".
+Important context: If the user says "play another live song" or "some live", they likely mean the rock band named "Live", not a live concert recording.
 Text: "{query}"
 Return ONLY a JSON object exactly like this: {{"song": "Song Name", "artist": "Artist Name"}} or the string "null"."""
     
