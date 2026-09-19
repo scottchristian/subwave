@@ -361,6 +361,7 @@ export interface DjBehaviourForm {
   allowRequestShoutOuts: boolean;
   allowRequestSkills: boolean;
   requestChatPrompt: string;
+  requestTrackPrompt: string;
 }
 
 /** The controller returns persisted numeric values; the editor keeps them as
@@ -376,6 +377,7 @@ export interface DjBehaviourValues {
   allowRequestShoutOuts?: boolean;
   allowRequestSkills?: boolean;
   requestChatPrompt?: string;
+  requestTrackPrompt?: string;
 }
 
 
