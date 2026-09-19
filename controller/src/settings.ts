@@ -641,6 +641,9 @@ export async function load() {
       requestChatPrompt: typeof stored.djBehaviour?.requestChatPrompt === 'string'
         ? stored.djBehaviour.requestChatPrompt.trim().slice(0, 10000)
         : DEFAULTS.djBehaviour.requestChatPrompt,
+      requestTrackPrompt: typeof stored.djBehaviour?.requestTrackPrompt === 'string'
+        ? stored.djBehaviour.requestTrackPrompt.trim().slice(0, 10000)
+        : DEFAULTS.djBehaviour.requestTrackPrompt,
     },
 
     // Repaired rather than refused, like ducking above: an offset the talk
@@ -1639,6 +1642,7 @@ export async function update(patch) {
       allowRequestShoutOuts?: boolean;
       allowRequestSkills?: boolean;
       requestChatPrompt?: string;
+      requestTrackPrompt?: string;
     }>(
       'djBehaviour', patch.djBehaviour,
     );
@@ -1653,6 +1657,9 @@ export async function update(patch) {
     }
     if (behaviour.requestChatPrompt !== undefined) {
       next.djBehaviour.requestChatPrompt = String(behaviour.requestChatPrompt).trim().slice(0, 10000);
+    }
+    if (behaviour.requestTrackPrompt !== undefined) {
+      next.djBehaviour.requestTrackPrompt = String(behaviour.requestTrackPrompt).trim().slice(0, 10000);
     }
   }
 

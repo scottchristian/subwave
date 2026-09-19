@@ -230,6 +230,10 @@ export function requestSystem(persona = session.onAirPersona()) {
     ? `\n\n${s.djBehaviour.requestChatPrompt}`
     : '';
 
+  const trackClause = s.djBehaviour?.requestTrackPrompt
+    ? `\n\n${s.djBehaviour.requestTrackPrompt}`
+    : '';
+
   // Inject available skill slugs so the model can route skill requests by name.
   let skillClause = '';
   if (allowSkills) {
@@ -253,7 +257,7 @@ export function requestSystem(persona = session.onAirPersona()) {
 
 ${frame}${settings.agentLanguageReminder(persona, wantIntro ? 'the "ack" and "intro" lines' : 'the "ack" line')}
 
-${LISTENER_TEXT_CLAUSE}${dj.REQUESTER_GREETING_CLAUSE}${dj.REQUESTER_NAME_CLAUSE} ${instruction('request', 'classification')}${chatClause}${skillClause}
+${LISTENER_TEXT_CLAUSE}${dj.REQUESTER_GREETING_CLAUSE}${dj.REQUESTER_NAME_CLAUSE} ${instruction('request', 'classification')}${chatClause}${trackClause}${skillClause}
 
 ${currentTrack}`;
 }

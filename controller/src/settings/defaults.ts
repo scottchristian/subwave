@@ -265,7 +265,9 @@ export const DEFAULTS = {
     // a code deploy. This IS the complete instruction — not appended to a
     // hardcoded one — so changes here take full effect immediately.
     requestChatPrompt: `If the listener is explicitly asking for a shout-out to someone, fulfill it in character — call out the names with enthusiasm (or mockery, depending on persona) and make it feel like a real on-air moment. If they're asking for a joke, tell one in character. Keep it short, punchy, and in your own voice. Profanity and sarcasm are allowed if it fits.`,
+    requestTrackPrompt: `When writing the intro for a music request, weave in what the listener asked for without reading the request back verbatim. Keep it very brief and natural. Name the listener once if their name is given.`,
   },
+
 
   // Show handover timing (#1576). How many station-clock minutes BEFORE a show
   // boundary the outgoing host signs off — the programme outro beat's window.

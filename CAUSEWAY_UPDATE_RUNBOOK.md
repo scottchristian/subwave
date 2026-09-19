@@ -377,8 +377,9 @@ Use this as the authoritative guide when resolving merge conflicts in Step 3c. E
 - `allowRequestShoutOuts` (boolean, default `true`)
 - `allowRequestSkills` (boolean, default `true`)
 - `requestChatPrompt` (string, max 10000 chars, has a default shout-out/joke instruction)
+- `requestTrackPrompt` (string, max 10000 chars, appended to music request system prompt)
 **Where to edit:** Admin → Settings → DJ Behaviour → "Listener request chat" card.
 
 ### web/components/admin/settings/DjBehaviourSection.tsx & shared.tsx
-**What:** Added the "Listener request chat" card with toggle for shout-outs, toggle for skills, and a full-height textarea for the request chat prompt.
+**What:** Added the "Listener request chat" card with toggle for shout-outs, toggle for skills, and a full-height textarea for the request chat prompt and music request intro prompt.
 **Why:** Operator-editable on the fly, no container restart needed.

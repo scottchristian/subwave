@@ -441,6 +441,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
         allowRequestShoutOuts: v.djBehaviour?.allowRequestShoutOuts !== false,
         allowRequestSkills: v.djBehaviour?.allowRequestSkills !== false,
         requestChatPrompt: v.djBehaviour?.requestChatPrompt ?? `If the listener is explicitly asking for a shout-out to someone, fulfill it in character — call out the names with enthusiasm (or mockery, depending on persona) and make it feel like a real on-air moment. If they're asking for a joke, tell one in character. Keep it short, punchy, and in your own voice. Profanity and sarcasm are allowed if it fits.`,
+        requestTrackPrompt: v.djBehaviour?.requestTrackPrompt ?? `When writing the intro for a music request, weave in what the listener asked for without reading the request back verbatim. Keep it very brief and natural. Name the listener once if their name is given.`,
       },
 
       // Absent reads as ON, matching the controller's coercion.

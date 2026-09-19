@@ -294,6 +294,19 @@ export function DjBehaviourSection({ form, setForm, busy, saveSettings, fieldErr
             DJ is allowed to say. Changes take effect on the next request.
           </p>
         </div>
+        <div className="field mt-5">
+          <Label>Music request intro prompt</Label>
+          <Textarea
+            id="dj-request-track-prompt"
+            rows={5}
+            value={form.djBehaviour.requestTrackPrompt ?? ''}
+            onChange={e => setForm(f => ({ ...f, djBehaviour: { ...f.djBehaviour, requestTrackPrompt: e.target.value } }))}
+            placeholder="Instructions the DJ receives when writing an intro for a music request…"
+          />
+          <p className="mt-2 text-[13px] leading-[1.55] text-muted">
+            This instruction is appended to the system prompt when fulfilling a standard music request. Use this to control the length, tone, or specific details the DJ should mention (or ignore) when acknowledging the request over the track's intro.
+          </p>
+        </div>
       </Card>
 
       <Card title="Extended Sleeve Notes" sub="coming soon">

@@ -2963,7 +2963,9 @@ export const djBehaviourPatchSchema = settingsBlockOf({
   allowRequestShoutOuts: z.boolean({ error: 'djBehaviour.allowRequestShoutOuts must be a boolean' }),
   allowRequestSkills: z.boolean({ error: 'djBehaviour.allowRequestSkills must be a boolean' }),
   requestChatPrompt: settingsTrimmedString(10000, 'djBehaviour.requestChatPrompt must be 10000 characters or fewer'),
+  requestTrackPrompt: settingsTrimmedString(10000, 'djBehaviour.requestTrackPrompt must be 10000 characters or fewer'),
 });
+
 
 
 /**
