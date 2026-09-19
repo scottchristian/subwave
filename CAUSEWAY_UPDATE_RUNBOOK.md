@@ -354,3 +354,31 @@ Use this as the authoritative guide when resolving merge conflicts in Step 3c. E
 ### web/components/admin/settings/LlmSection.tsx, TtsSection.tsx, SettingsPanel.tsx, registry.ts, shared.tsx
 **What:** Added the UI toggles for `geminiSafety` blocks and the textarea for `listenerPrompt` and `banterPrompt` to the Admin Settings dashboard.
 **Why:** Allows the station operator to tune the DJ's behavior, safety limits, and listener assumptions on the fly without restarting the container.
+
+### controller/src/broadcast/dj-agent/schemas.ts
+**What:**
+- Extended `requestSchema` `kind` enum from `['track', 'chat']` to `['track', 'chat', 'skill']`. Added optional `skill` field (the slug to trigger).
+- Updated `requestSystem()` to conditionally inject:
+  - The full `djBehaviour.requestChatPrompt` text (editable from UI) when `allowRequestShoutOuts` is true — this IS the complete instruction, not an append.
+  - A list of enabled skill slugs when `allowRequestSkills` is true.
+- Updated the `ack` field description to explicitly allow profanity, sarcasm and harshness.
+**Why:** Enables the DJ Agent to respond to shout-outs/jokes directly and route skill requests to station capabilities.
+
+### controller/src/broadcast/dj-agent.ts
+**What:** Added a "Skill escape (C2)" block in `runRequestViaAgent` that returns `{ skill: slug }` to the caller when `kind === 'skill'`.
+**Why:** Decouples the skill dispatch from the agent itself so the route can handle it synchronously.
+
+### controller/src/routes/request.ts
+**What:** Added a skill escape handler that calls `runCapability(slug)` when the agent returns a skill slug. The skill airs immediately (over the music, ducked), and its generated text is returned as the listener's ack.
+**Why:** Allows listeners to trigger station skills (weather, grog prices, etc.) via a request.
+
+### controller/src/schemas/settings.ts & controller/src/settings/defaults.ts & controller/src/settings.ts
+**What:** Added three new `djBehaviour` settings:
+- `allowRequestShoutOuts` (boolean, default `true`)
+- `allowRequestSkills` (boolean, default `true`)
+- `requestChatPrompt` (string, max 10000 chars, has a default shout-out/joke instruction)
+**Where to edit:** Admin → Settings → DJ Behaviour → "Listener request chat" card.
+
+### web/components/admin/settings/DjBehaviourSection.tsx & shared.tsx
+**What:** Added the "Listener request chat" card with toggle for shout-outs, toggle for skills, and a full-height textarea for the request chat prompt.
+**Why:** Operator-editable on the fly, no container restart needed.

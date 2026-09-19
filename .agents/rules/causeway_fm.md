@@ -179,6 +179,18 @@ scp custom_assets/station_ident_default.wav root@192.168.68.196:/root/subwave/st
     - `lidarr_watchdog.py` — updated to include `"x-station-auth": "Midw@y!FM2026"` in the HTTP headers when submitting programmatic requests.
 - **Midway Tavern Happy Hour Skill Time-Gate:** Added `state/skills/midway-tavern/tool.mjs` — a custom script that checks the current Hobart (`Australia/Hobart`) timezone and only allows the skill to fire on **Thursday, Friday, or Saturday between 2 PM and 6 PM** local time. Returns `{ available: false }` at all other times to prevent the Happy Hour announcement from triggering incorrectly. The `SKILL.md` prompt was updated to specify **$6 schooners** as the happy hour special. The old cron-only schedule (`cron: 45 15 * * 5,6`) was removed in favour of this runtime check.
 - **Multi-Speaker Banter Queue Batching:** Modified `controller/src/broadcast/queue.ts` to have `announceExchange()` attempt to batch a full multi-speaker banter exchange through `tts.speakExchange()` as a single audio clip, falling back to sequential per-line rendering if the batch fails. **NEVER remove this batching logic** — the user explicitly wants to retain this architecture.
+- **Request Chat Routing (Shout-Outs, Jokes & Skills):** Extended the DJ Agent request path to handle non-music requests directly.
+    - **Schema (`controller/src/broadcast/dj-agent/schemas.ts`):** The `requestSchema` `kind` enum now includes `'skill'`. A new optional `skill` field carries the skill slug. The `requestSystem()` prompt now conditionally injects:
+        - The operator-editable **"Request Chat Prompt"** (`djBehaviour.requestChatPrompt`) as the complete instruction for shout-outs and jokes — not appended to a hardcoded rule, so it can be replaced entirely from the UI.
+        - A list of enabled skill slugs so the model can route explicit requests like "what's the weather?" to `kind: "skill"`.
+    - **DJ Agent (`controller/src/broadcast/dj-agent.ts`):** Added a "Skill escape (C2)" block that returns `{ skill: slug }` to the caller when the agent outputs `kind: 'skill'`.
+    - **Route (`controller/src/routes/request.ts`):** The skill escape is handled by calling `runCapability(slug)`, which airs the skill immediately over the music (ducked). The generated text is returned to the listener as the request acknowledgment.
+    - **Settings (backend + UI):** Three new `djBehaviour` settings control this feature:
+        - `allowRequestShoutOuts` (boolean, default `true`) — enables shout-outs and jokes in request acks.
+        - `allowRequestSkills` (boolean, default `true`) — enables listener-triggered skills via requests.
+        - `requestChatPrompt` (string, max 10000 chars) — the **complete** instruction the DJ receives for chat (shout-out/joke) requests, editable live from **Settings → DJ Behaviour → Listener Request Chat**. The default is a snarky-but-friendly shout-out instruction allowing profanity.
+    - **Agent ack swearing:** Also updated the `ack` field description in `requestSchema` and the agent schema to explicitly allow profanity and sarcasm in acknowledgments when the listener's tone warrants it.
+
 
 ## Common Errors & Troubleshooting
 

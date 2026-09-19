@@ -358,6 +358,9 @@ export interface DjBehaviourForm {
   recapLimit: string;
   recapMinutes: string;
   recapChars: string;
+  allowRequestShoutOuts: boolean;
+  allowRequestSkills: boolean;
+  requestChatPrompt: string;
 }
 
 /** The controller returns persisted numeric values; the editor keeps them as
@@ -370,7 +373,11 @@ export interface DjBehaviourValues {
   recapLimit?: number;
   recapMinutes?: number;
   recapChars?: number;
+  allowRequestShoutOuts?: boolean;
+  allowRequestSkills?: boolean;
+  requestChatPrompt?: string;
 }
+
 
 export interface FormState {
   crossfadeDuration: string;
