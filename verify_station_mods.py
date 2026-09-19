@@ -35,7 +35,7 @@ def test_api_auth():
 
 def test_9router_probe():
     print("Testing 9router SSE bypass (/settings/llm/probe-compat)...")
-    auth_val = base64.b64encode(b"admin:Midw@y!FM2026").decode("utf-8")
+    auth_val = base64.b64encode(b"admin:ddFn.VGLyGYmAuT6Dik9").decode("utf-8")
     resp = requests.post(
         "https://radio.ghostmaster.online/api/settings/llm/probe-compat",
         json={"baseUrl": "http://192.168.68.193:20128/v1beta", "apiKey": "test", "model": "free_shit"},

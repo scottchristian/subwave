@@ -255,7 +255,18 @@ export const DEFAULTS = {
     recapLimit: 10,
     recapMinutes: 120,
     recapChars: 140,
+    // Listener request chat capabilities. Enabled by default so the DJ can
+    // respond to explicit shout-outs and station skill triggers.
+    allowRequestShoutOuts: true,
+    allowRequestSkills: true,
+    // The full system prompt clause injected when a listener's request is
+    // classified as a non-music chat (shout-out, joke, etc.) rather than a
+    // music request. Editable by the admin so the style can be changed without
+    // a code deploy. This IS the complete instruction — not appended to a
+    // hardcoded one — so changes here take full effect immediately.
+    requestChatPrompt: `If the listener is explicitly asking for a shout-out to someone, fulfill it in character — call out the names with enthusiasm (or mockery, depending on persona) and make it feel like a real on-air moment. If they're asking for a joke, tell one in character. Keep it short, punchy, and in your own voice. Profanity and sarcasm are allowed if it fits.`,
   },
+
   // Show handover timing (#1576). How many station-clock minutes BEFORE a show
   // boundary the outgoing host signs off — the programme outro beat's window.
   // 5 is exactly where the beat has always fired (:55 of the final hour), so an

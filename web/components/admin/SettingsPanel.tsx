@@ -438,7 +438,11 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
         recapLimit: String(v.djBehaviour?.recapLimit ?? 10),
         recapMinutes: String(v.djBehaviour?.recapMinutes ?? 120),
         recapChars: String(v.djBehaviour?.recapChars ?? 140),
+        allowRequestShoutOuts: v.djBehaviour?.allowRequestShoutOuts !== false,
+        allowRequestSkills: v.djBehaviour?.allowRequestSkills !== false,
+        requestChatPrompt: v.djBehaviour?.requestChatPrompt ?? `If the listener is explicitly asking for a shout-out to someone, fulfill it in character — call out the names with enthusiasm (or mockery, depending on persona) and make it feel like a real on-air moment. If they're asking for a joke, tell one in character. Keep it short, punchy, and in your own voice. Profanity and sarcasm are allowed if it fits.`,
       },
+
       // Absent reads as ON, matching the controller's coercion.
       djSpeakClock: v.djSpeakClock !== false,
       // Absent (a settings.json predating the key) reads as the 5-minute

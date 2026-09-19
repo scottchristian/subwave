@@ -217,9 +217,9 @@ def sync_requests(db_path, api_url, api_key):
                     conn.commit()
                     logger.info(f"Request {rowid} ({song_name}) queued in Lidarr album {album_id}.")
                 else:
-                    # Could not add — mark as sent anyway to stop infinite retry
-                    logger.warning(f"Could not add album '{album_name}' to Lidarr for row {rowid}. Marking sent to prevent retry loop.")
-                    cursor.execute("UPDATE missed_requests SET sent_to_lidarr = 1 WHERE id = ?", (rowid,))
+                    # Could not add album — mark as sent and fallback to monitoring the artist's tracks
+                    logger.warning(f"Could not add album '{album_name}' to Lidarr for row {rowid}. Falling back to artist monitor.")
+                    cursor.execute("UPDATE missed_requests SET sent_to_lidarr = 1, lidarr_album_id = ? WHERE id = ?", (f"ARTIST:{artist_id}", rowid,))
                     conn.commit()
             else:
                 logger.warning(f"Row {rowid} missing album name. Artist added, but no album to request.")

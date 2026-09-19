@@ -2289,7 +2289,8 @@ class Queue {
           meta: {},
           settlesHandoff: kind === 'handoff' ? index === rendered.length - 1 : undefined,
         })),
-        { exchange: !isBatched, notBefore: kind === 'handoff' ? session.handoffBoundaryAt() : null },
+        { exchange: !isBatched, notBefore: kind === 'handoff' ? session.handoffBoundaryAt() : null }
+      );
     }
     for (const [index, l] of rendered.entries()) {
       if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {

@@ -81,13 +81,14 @@ export function requestSchema() {
     // to 'track' (objectFallbacks below) and falls through to the repick
     // salvage and then the caller's stateless cascade — the branch that keeps
     // the "never refuse music" rule true.
-    kind: z.enum(['track', 'chat']).describe('"track" when the listener wants music played — the normal case, and the right answer whenever you are unsure. "chat" ONLY when the message is not a music request at all (a question, a greeting, banter, a demand to change how the station behaves) — then "ack" answers them, "id" is null, and nothing is queued.'),
+    kind: z.enum(['track', 'chat', 'skill']).describe('"track" when the listener wants music played — the normal case, and the right answer whenever you are unsure. "chat" ONLY when the message is not a music request at all (a shout-out, a joke, banter, a question, or a greeting). "skill" ONLY when the listener explicitly asks for something a listed station skill handles (e.g. weather, grog prices) — then set "skill" to the skill slug, "id" is null.'),
     // Same seed clause as PICK_SCHEMA.id above — the request event line carries
     // the on-air track's `[id: …]` too (routes/request.ts + runRequestViaAgent),
     // and repickRequestFromSeen's comment records the same id-copied-from-the-
     // session-turn signature. requestSystem() says it in prose; the field
     // description is what travels to every provider as the output contract.
-    id: z.string().nullable().describe(`the exact song id returned by one of the discovery tools — never invent or compose ids. ${SEED_NOT_A_PICK_CLAUSE} Null ONLY when kind is "chat"`),
+    id: z.string().nullable().describe(`the exact song id returned by one of the discovery tools — never invent or compose ids. ${SEED_NOT_A_PICK_CLAUSE} Null ONLY when kind is "chat" or "skill"`),
+    skill: z.string().nullable().describe('the exact skill slug to trigger — ONLY set when kind is "skill". Must be one of the slugs listed in the system prompt. Null for any other kind.'),
     ack: z.string().describe('short on-air acknowledgement of the listener, in character (profanity, sarcasm, and harshness are explicitly allowed and encouraged if it matches their persona or the listener\'s tone) — max 20 words; no "thank you for listening" or self-intros'),
   });
   // `kind` is REQUIRED and non-nullable, so coerceModelPayload deliberately
@@ -96,7 +97,7 @@ export function requestSchema() {
   // pre-existing, already-safe behaviour from before this field existed. Same
   // precedent as REQUEST_SCHEMA_TOLERANT (llm/internal/prompts/request.ts) and
   // skills/_agent.ts's `segment`.
-  const tolerant = { objectFallbacks: { kind: 'track' } };
+  const tolerant = { objectFallbacks: { kind: 'track', skill: null } };
   // Station voice off (settings.tts.enabled): no spoken intro can air, so the
   // field leaves the contract entirely rather than being written and dropped —
   // the request-path counterpart of runTrackEvent forcing wantLink=false, on
@@ -218,11 +219,42 @@ export function requestSystem(persona = session.onAirPersona()) {
   const currentTrack = wantIntro
     ? `${instruction('request', 'current-track-with-intro')}${dj.AIR_TIME_CLAUSE}`
     : instruction('request', 'current-track-no-intro');
+
+  const s = settings.get();
+  const allowShoutOuts = s.djBehaviour?.allowRequestShoutOuts ?? true;
+  const allowSkills = s.djBehaviour?.allowRequestSkills ?? true;
+
+  // The shout-out/joke clause is the full operator-editable prompt — not an
+  // append — so the admin can replace it entirely to change tone/rules.
+  const chatClause = allowShoutOuts && s.djBehaviour?.requestChatPrompt
+    ? `\n\n${s.djBehaviour.requestChatPrompt}`
+    : '';
+
+  // Inject available skill slugs so the model can route skill requests by name.
+  let skillClause = '';
+  if (allowSkills) {
+    try {
+      // Import lazily to avoid circular deps at module load time.
+      // skillCatalog is populated once skills are loaded, which happens before
+      // any request is ever processed.
+      const { skillCatalog } = require('../../skills/_agent.js');
+      const catalog: Array<{ kind: string; label?: string; enabled?: boolean }> = skillCatalog() || [];
+      const enabledSkills = catalog.filter(c => c.enabled !== false);
+      if (enabledSkills.length > 0) {
+        const list = enabledSkills.map(c => `- ${c.kind}${c.label ? ` (${c.label})` : ''}`).join('\n');
+        skillClause = `\n\nAvailable station skills (use kind: "skill" + the slug when a listener explicitly requests one):\n${list}`;
+      }
+    } catch {
+      // If catalog isn't available yet, skip the skill clause gracefully.
+    }
+  }
+
   return `${settings.agentPersonaPreamble(persona)}
 
 ${frame}${settings.agentLanguageReminder(persona, wantIntro ? 'the "ack" and "intro" lines' : 'the "ack" line')}
 
-${LISTENER_TEXT_CLAUSE}${dj.REQUESTER_GREETING_CLAUSE}${dj.REQUESTER_NAME_CLAUSE} ${instruction('request', 'classification')}
+${LISTENER_TEXT_CLAUSE}${dj.REQUESTER_GREETING_CLAUSE}${dj.REQUESTER_NAME_CLAUSE} ${instruction('request', 'classification')}${chatClause}${skillClause}
 
 ${currentTrack}`;
 }
+

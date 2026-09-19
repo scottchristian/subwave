@@ -632,7 +632,17 @@ export async function load() {
         DEFAULTS.djBehaviour.recapChars,
         DJ_RECAP_CHARS_BOUNDS,
       ),
+      allowRequestShoutOuts: typeof stored.djBehaviour?.allowRequestShoutOuts === 'boolean'
+        ? stored.djBehaviour.allowRequestShoutOuts
+        : DEFAULTS.djBehaviour.allowRequestShoutOuts,
+      allowRequestSkills: typeof stored.djBehaviour?.allowRequestSkills === 'boolean'
+        ? stored.djBehaviour.allowRequestSkills
+        : DEFAULTS.djBehaviour.allowRequestSkills,
+      requestChatPrompt: typeof stored.djBehaviour?.requestChatPrompt === 'string'
+        ? stored.djBehaviour.requestChatPrompt.trim().slice(0, 10000)
+        : DEFAULTS.djBehaviour.requestChatPrompt,
     },
+
     // Repaired rather than refused, like ducking above: an offset the talk
     // table's programme row cannot sample is a sign-off that never airs, and a
     // hand-edited settings.json is this path's input.
@@ -1626,10 +1636,13 @@ export async function update(patch) {
       recapLimit?: number;
       recapMinutes?: number;
       recapChars?: number;
+      allowRequestShoutOuts?: boolean;
+      allowRequestSkills?: boolean;
+      requestChatPrompt?: string;
     }>(
       'djBehaviour', patch.djBehaviour,
     );
-    for (const key of ['showWelcome', 'sameHostAcknowledgement', 'extendedSleeveNotes'] as const) {
+    for (const key of ['showWelcome', 'sameHostAcknowledgement', 'extendedSleeveNotes', 'allowRequestShoutOuts', 'allowRequestSkills'] as const) {
       if (behaviour[key] !== undefined) next.djBehaviour[key] = behaviour[key];
     }
     if (behaviour.releaseYearMentions !== undefined) {
@@ -1638,7 +1651,11 @@ export async function update(patch) {
     for (const key of ['recapLimit', 'recapMinutes', 'recapChars'] as const) {
       if (behaviour[key] !== undefined) next.djBehaviour[key] = behaviour[key];
     }
+    if (behaviour.requestChatPrompt !== undefined) {
+      next.djBehaviour.requestChatPrompt = String(behaviour.requestChatPrompt).trim().slice(0, 10000);
+    }
   }
+
   if ('handover' in patch) {
     // No mixer restart: the offset is read live by broadcast/handover-policy.ts
     // at each programme tick, not handed to liquidsoap as a startup file.

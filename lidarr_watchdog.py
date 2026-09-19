@@ -3,6 +3,16 @@ import requests
 import json
 import os
 import re
+import difflib
+
+def is_fuzzy_match(title1, title2, threshold=0.8):
+    if not title1 or not title2:
+        return False
+    def clean(s): return re.sub(r'[^a-z0-9 ]', '', str(s).lower()).strip()
+    c1, c2 = clean(title1), clean(title2)
+    if c1 == c2 or c1 in c2 or c2 in c1:
+        return True
+    return difflib.SequenceMatcher(None, c1, c2).ratio() >= threshold
 
 LIDARR_URL = "http://192.168.68.191:8686"
 LIDARR_API_KEY = "3aa1ec1352f841cd9ba28646a901a37d"
@@ -40,17 +50,20 @@ def main():
             tracks = resp.json()
             downloaded = False
             for t in tracks:
-                if is_artist_req:
+                t_title = t.get("title", "")
+                
+                # If they requested a generic band (Any song), grab the first downloaded one
+                if str(song_name).lower() in ["any", "unknown", ""]:
                     if t.get("hasFile", False):
-                        song_name = t.get("title", "Unknown Track")
+                        song_name = t_title
                         downloaded = True
                         break
-                else:
-                    t_title = t.get("title", "").lower()
-                    if song_name.lower() in t_title or t_title in song_name.lower():
-                        if t.get("hasFile", False):
-                            downloaded = True
-                            break
+                # Otherwise, it's a specific song request, so we MUST match the title
+                elif is_fuzzy_match(song_name, t_title):
+                    if t.get("hasFile", False):
+                        song_name = t_title
+                        downloaded = True
+                        break
             
             if not downloaded:
                 continue

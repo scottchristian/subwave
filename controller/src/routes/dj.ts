@@ -1120,6 +1120,8 @@ router.delete('/dj/queue/block/:blockId', requireAdmin, async (req, res) => {
   } catch (err) {
     queue.log('error', `/dj/queue block cancel failed: ${err.message}`);
     res.status(502).json({ error: err.message });
+  }
+});
 // POST /dj/queue-with-intro — push a specific track to the queue with a raw intro
 // Body: { track: {id, title, artist}, introScript: string, requester?: string }
 // ---------------------------------------------------------------------------

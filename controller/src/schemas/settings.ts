@@ -875,7 +875,11 @@ export const djBehaviourPatchSchema = settingsBlockOf({
     DJ_RECAP_CHARS_BOUNDS,
     'djBehaviour.recapChars must be a whole number between 40 and 1000',
   ),
+  allowRequestShoutOuts: z.boolean({ error: 'djBehaviour.allowRequestShoutOuts must be a boolean' }),
+  allowRequestSkills: z.boolean({ error: 'djBehaviour.allowRequestSkills must be a boolean' }),
+  requestChatPrompt: settingsTrimmedString(10000, 'djBehaviour.requestChatPrompt must be 10000 characters or fewer'),
 });
+
 
 /**
  * Station default for the show-boundary fade (#1574). Strict boolean, the same

@@ -935,6 +935,14 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       return { ack: screened.ack, track: null, introScript: null, guard: screened.guard };
     }
 
+    // Skill escape (C2): an explicit kind:"skill" with a slug means the listener
+    // asked for a station capability — route it to runCapability in the caller.
+    // No session turn here; the skill itself speaks, so the caller's log records it.
+    if (object?.kind === 'skill' && typeof object?.skill === 'string' && object.skill.trim()) {
+      return { ack: object.ack?.trim() || null, track: null, introScript: null, guard: null, skill: object.skill.trim() };
+    }
+
+
     let song = object?.id ? extras.seen.get(object.id) : null;
     // Near-miss repair, same as the pick path: an unambiguous prefix /
     // clear-winner edit-distance match against the run's own candidates

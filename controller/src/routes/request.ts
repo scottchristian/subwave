@@ -25,6 +25,7 @@ import { requireStationAuth } from '../middleware/station-auth.js';
 import { listenerRequestSchema } from '../schemas/request.js';
 import { shuffle } from '../util/shuffle.js';
 import { requestWaitClause } from '../broadcast/queue/pure.js';
+import { runCapability } from '../skills/_agent.js';
 
 export const router = express.Router();
 
@@ -355,6 +356,23 @@ async function resolveRequest(entry) {
         entry.path = 'chat';
         entry.pickSource = 'agent-chat';
         return resolved({ ack: agentRes.ack, track: null, queuePosition: null });
+      }
+      // Skill escape (C2): the agent wants to trigger a station skill.
+      if ((agentRes as any).skill) {
+        const slug: string = (agentRes as any).skill;
+        queue.log('request', `agent skill-routed: ${slug}`);
+        entry.path = 'skill';
+        entry.pickSource = `skill:${slug}`;
+        let skillText: string | null = null;
+        try {
+          const ctx = await getFullContext();
+          const skillRun = await runCapability(slug, ctx);
+          skillText = skillRun.text || null;
+        } catch (skillErr: any) {
+          queue.log('error', `agent skill "${slug}" failed: ${skillErr.message}`);
+        }
+        const ackLine = agentRes.ack || skillText || `Running ${slug} for you.`;
+        return resolved({ ack: ackLine, track: null, queuePosition: null });
       }
       if (agentRes.refused) {
         // The agent declined to queue and returned the track only so the ack and
