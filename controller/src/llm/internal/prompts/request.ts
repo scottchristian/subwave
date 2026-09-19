@@ -115,7 +115,7 @@ export function requestMatcherSystem(persona: unknown): string {
   // the only spoken line in the system written with no persona voice at all
   // (the librarian framing above owns every other field).
   const personaSuffix = p?.name
-    ? `\n\nThe "ack" line is read on air by ${p.name}, the station's DJ${p.soul ? ` — ${p.soul}` : ''}. Write the ack in their voice; every other field stays plain and functional.`
+    ? `\n\nThe "ack" line is read on air by ${p.name}, the station's DJ${p.soul ? ` — ${p.soul}` : ''}. Write the ack in their voice (profanity, sarcasm, and harshness are explicitly allowed and encouraged if it matches their persona or the listener's tone); every other field stays plain and functional.`
     : '';
   // The on-air persona's language always anchors the spoken `ack` — unset
   // defaults to English rather than omitting the clause, so a default station
