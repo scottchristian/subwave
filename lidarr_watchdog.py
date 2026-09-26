@@ -86,6 +86,10 @@ def await_match(request_id, song_name, artist, timeout_sec=120):
                 time.sleep(5)
                 continue
             if not body.get("success") or not body.get("track"):
+                # No track queued — but a chat-answered "already queued" outcome
+                # (or a track that already aired) still means served.
+                if served_by_station(artist, song_name):
+                    return True
                 print(f"Request {request_id[:8]} ended without a track: {body.get('message')}")
                 return False
             track = body["track"]
@@ -104,31 +108,36 @@ def await_match(request_id, song_name, artist, timeout_sec=120):
     return False
 
 
-def already_queued(artist, song_name):
-    """True when the station's upcoming queue already holds this artist (any
-    song) — or this exact song. Stops double rows (e.g. an 'Any' row plus a
-    named-song row for the same band) and impatient re-requests from stacking
-    the same band twice in a row."""
+def served_by_station(artist, song_name, history_n=15):
+    """True when the station already holds this artist in the upcoming queue
+    OR aired them in recent history — either way the download reached air and
+    the row is served. Stops the minute-cron re-request loop (including
+    chat-answered 'already queued' outcomes, which carry no track)."""
     try:
         r = requests.get(f"{STATION_URL}/state", timeout=15)
         if r.status_code != 200:
             return False
-        upcoming = r.json().get("upcoming", [])
+        body = r.json()
+        pool = list(body.get("upcoming", [])) + list(body.get("history", [])[:history_n])
     except Exception as e:
         print("Queue check error:", e)
         return False
     specific = str(song_name or "").lower() not in ["any", "unknown", ""]
-    for item in upcoming:
-        track = item.get("track", {}) or {}
+    for item in pool:
+        track = item.get("track", {}) or item or {}
         if is_fuzzy_match(artist, track.get("artist", "")):
             if not specific or is_fuzzy_match(song_name, track.get("title", "")):
-                print(f"Already queued: {track.get('title')} by {track.get('artist')} — skipping re-request.")
+                print(f"Served by station: {track.get('title')} by {track.get('artist')} — skipping re-request.")
                 return True
-            # Same artist, different song already queued: one band appearance
+            # Same artist, different song queued/aired: one band appearance
             # is enough; the extra row is served by what's already coming.
-            print(f"Same artist already queued: {track.get('title')} by {track.get('artist')} — skipping re-request.")
+            print(f"Same artist served: {track.get('title')} by {track.get('artist')} — skipping re-request.")
             return True
     return False
+
+
+def already_queued(artist, song_name):
+    return served_by_station(artist, song_name)
 
 
 def main():
