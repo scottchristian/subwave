@@ -104,6 +104,33 @@ def await_match(request_id, song_name, artist, timeout_sec=120):
     return False
 
 
+def already_queued(artist, song_name):
+    """True when the station's upcoming queue already holds this artist (any
+    song) — or this exact song. Stops double rows (e.g. an 'Any' row plus a
+    named-song row for the same band) and impatient re-requests from stacking
+    the same band twice in a row."""
+    try:
+        r = requests.get(f"{STATION_URL}/state", timeout=15)
+        if r.status_code != 200:
+            return False
+        upcoming = r.json().get("upcoming", [])
+    except Exception as e:
+        print("Queue check error:", e)
+        return False
+    specific = str(song_name or "").lower() not in ["any", "unknown", ""]
+    for item in upcoming:
+        track = item.get("track", {}) or {}
+        if is_fuzzy_match(artist, track.get("artist", "")):
+            if not specific or is_fuzzy_match(song_name, track.get("title", "")):
+                print(f"Already queued: {track.get('title')} by {track.get('artist')} — skipping re-request.")
+                return True
+            # Same artist, different song already queued: one band appearance
+            # is enough; the extra row is served by what's already coming.
+            print(f"Same artist already queued: {track.get('title')} by {track.get('artist')} — skipping re-request.")
+            return True
+    return False
+
+
 def main():
     conn = sqlite3.connect("/root/subwave/state/missed_requests.db")
     c = conn.cursor()
@@ -151,6 +178,14 @@ def main():
                 continue
         except Exception as e:
             print("Lidarr check error:", e)
+            continue
+
+        # Coalesce: another row (or an impatient re-request) may already have
+        # queued this artist. One band appearance per download wave — mark this
+        # row served instead of stacking the queue.
+        if already_queued(artist, song_name):
+            c.execute("UPDATE missed_requests SET fulfilled = 1 WHERE id = ?", (req_id,))
+            conn.commit()
             continue
 
         print(f"File downloaded for {song_name}! Triggering scan...")
