@@ -9,10 +9,10 @@ This codebase is being used to host a personal radio station named **Causeway FM
 Must try and keep cost's to $0 where possible, only suggest to spend $ on tokens when nessesary.
 
 ## LLM Model Stack
-- **Primary Model:** `Free_Shit` (9router alias — currently resolves to a free Nvidia Nemotron reasoning model via OpenRouter)
-- **Failover Model:** `gemini-2.5-flash` (via the `google` provider in Subwave)
-- Agents **MUST** configure the station with `Free_Shit` as the primary model and `gemini-2.5-flash` as the backup. Do not change this without explicit user instruction.
-- **Important**: `Free_Shit` is a reasoning model that occasionally wraps tool-call arguments in markdown fences (` ```json ... ``` `). A custom fix in `controller/src/llm/internal/provider/registry.ts` strips these fences in the `openAICompatibleFetch` response handler. Additionally, `Free_Shit` is on the skip-list for OpenAI-specific no-think injection (`chat_template_kwargs`, `thinking`, `reasoning_format`) to avoid 400 Bad Requests from the upstream router.
+- **Primary Model:** `gemini/gemini-3.5-flash-lite` (via 9router at `http://192.168.68.193:20128/v1`, key = `.env GEMINI_API_KEY`). Set 2026-09-26 by operator instruction — do NOT switch back to `Free_Shit` without explicit operator approval (see incident 2026-09-26 below).
+- **Failover Model:** `gemini-2.5-flash` (via the `google` provider in Subwave, key = `GOOGLE_GENERATIVE_AI_API_KEY` in `state/secrets.env`).
+- `Free_Shit` (9router alias, free Nvidia Nemotron) is PARKED, not primary. It still throws `Invalid JSON response` on structured calls (Station ID, picker) even with the fence-strip/prose-synthesis fixes in `registry.ts`.
+- **Important**: `Free_Shit` occasionally wraps tool-call arguments in markdown fences (` ```json ... ``` `). A custom fix in `controller/src/llm/internal/provider/registry.ts` strips these fences in the `openAICompatibleFetch` response handler. Additionally, `Free_Shit` is on the skip-list for OpenAI-specific no-think injection (`chat_template_kwargs`, `thinking`, `reasoning_format`) to avoid 400 Bad Requests from the upstream router. `gemini/*` models are NOT on that skip-list — but `gemini/gemini-3.8-flash` DOES 400 with `Thinking level MINIMAL is not supported`, so never set it primary. `gemini-3.5-flash-lite` accepts the full param set (verified 2026-09-26).
 
 ## TTS Configuration
 - **Primary TTS Engine:** The station uses a custom Gemini TTS container running `gemini-2.5-flash-preview-tts` as its primary text-to-speech engine for all personas.
@@ -161,6 +161,16 @@ scp custom_assets/station_ident_default.wav root@192.168.68.196:/root/subwave/st
 
 
 ## Common Errors & Troubleshooting
+
+### Silent DJs / 2026-09-26 — NEVER restore a backup export over live settings blind
+Symptoms: music played fine, zero presenter speech; settings save 400'd `unknown settings keys: pauseTalkMinSeconds, djBehaviour`.
+Two stacked faults, both traced to a backup restore plus a stale prod image:
+1. The restored `state/settings.json` carried redacted `"set"` sentinels as LITERAL provider keys (`llm.keys["openai-compatible"] = "set"`). Controller sent `Bearer set` → 9router 401 on every LLM call → no scripts, music only. (`getRedacted()` masks keys as `'set'`; replaying that export through `update()` destroys credentials.)
+2. Prod ran GHCR image 1.13.0 while repo is 1.16.0: old patch registry rejected new settings keys (the 400), old `registry.ts` lacked `stream: false` + fence fixes (Invalid JSON on 9router SSE).
+Fix applied: real keys rewritten into `llm.keys` (`openai-compatible` from `.env GEMINI_API_KEY`, `google` from `secrets.env GOOGLE_GENERATIVE_AI_API_KEY`), fallback set to `google/gemini-2.5-flash`, primary set to `gemini/gemini-3.5-flash-lite`, then `bash deploy_controller.sh` hot-patch + restart. Verified: fresh `voice-playing.json`, zero `[error]` lines. Rollback copy: `state/settings.json.pre-silent-fix.bak` on server.
+Regression guards:
+- After ANY settings restore, check `llm.keys` holds real key material (lengths, never the literal `"set"`), then `docker restart sub-wave-controller` and confirm no `Unauthorized`/`INVALID_ARGUMENT` in logs.
+- Keep prod controller hot-patched from this repo (`deploy_controller.sh`); a GHCR pull wipes it and re-opens both faults. Long-term fix is an image bump to 1.16+.
 
 ### Icecast Admin 429 (Too Many Failed Attempts)
 If the main web dashboard reports: `can’t reach Icecast admin: /listeners/connections failed (429): too many failed attempts, try again later`, this means a client or script has hit the API with invalid credentials too many times, triggering the controller's `MAX_AUTH_FAILURES` IP lockout in `controller/src/middleware/auth.ts`.
