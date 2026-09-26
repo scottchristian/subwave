@@ -5,6 +5,7 @@ import string
 import random
 import sys
 import os
+import argparse
 import re
 
 def get_subsonic_auth(user, password):
@@ -20,34 +21,41 @@ def get_subsonic_auth(user, password):
     }
 
 def main():
+    parser = argparse.ArgumentParser(description="Navidrome Blocklist Generator")
+    parser.add_argument("--enable-spotify", action="store_true", help="Enable filtering by Spotify liked artists")
+    args = parser.parse_args()
+
     print("=== Navidrome Blocklist Generator ===")
     
     # 1. Load Spotify Artists
-    spotify_db_path = "/root/subwave/spotify_library.db"
     liked_artists = set()
-    try:
-        conn = sqlite3.connect(spotify_db_path)
-        c = conn.cursor()
-        c.execute('''
-            SELECT DISTINCT t.artist 
-            FROM tracks t
-            JOIN liked_tracks lt ON t.id = lt.track_id
-        ''')
-        for row in c.fetchall():
-            if row[0]:
-                for a in row[0].split(','):
-                    cleaned = a.strip().lower()
-                    if cleaned:
-                        liked_artists.add(cleaned)
-        conn.close()
-        print(f"Loaded {len(liked_artists)} distinct normalized artists from Spotify.")
-    except Exception as e:
-        print(f"Failed to read {spotify_db_path}: {e}")
-        if "no such table: liked_tracks" in str(e):
-            print("\nCRITICAL: The 'liked_tracks' table is missing from your spotify_library.db!")
-            print("Please pull the latest spotify_extract.py from your workspace and re-run it locally,")
-            print("then scp the new spotify_library.db to the server before running this filter script again.")
-        sys.exit(1)
+    if args.enable_spotify:
+        spotify_db_path = "/root/subwave/spotify_library.db"
+        try:
+            conn = sqlite3.connect(spotify_db_path)
+            c = conn.cursor()
+            c.execute('''
+                SELECT DISTINCT t.artist 
+                FROM tracks t
+                JOIN liked_tracks lt ON t.id = lt.track_id
+            ''')
+            for row in c.fetchall():
+                if row[0]:
+                    for a in row[0].split(','):
+                        cleaned = a.strip().lower()
+                        if cleaned:
+                            liked_artists.add(cleaned)
+            conn.close()
+            print(f"Loaded {len(liked_artists)} distinct normalized artists from Spotify.")
+        except Exception as e:
+            print(f"Failed to read {spotify_db_path}: {e}")
+            if "no such table: liked_tracks" in str(e):
+                print("\nCRITICAL: The 'liked_tracks' table is missing from your spotify_library.db!")
+                print("Please pull the latest spotify_extract.py from your workspace and re-run it locally,")
+                print("then scp the new spotify_library.db to the server before running this filter script again.")
+            sys.exit(1)
+    else:
+        print("Skipping Spotify liked artist filtering (--enable-spotify not provided).")
 
     # 1.5 Load Missed Requests Whitelist
     missed_requests_db = "/root/subwave/state/missed_requests.db"
@@ -108,7 +116,7 @@ def main():
     # We will gather all tracks first for global remix deduplication
     print("\nFetching tracks for all artists to build library state... (this may take a few minutes)")
     all_tracks = []
-    bad_words = ["interlude", "intro", "skit", "instrumental"]
+    bad_words = ["interlude", "intro", "skit", "instrumental", "demo"]
     
     for i, artist in enumerate(navidrome_artists):
         if i % 10 == 0:
@@ -117,7 +125,9 @@ def main():
         artist_id = artist['id']
         artist_name = artist['name']
         artist_lower = artist_name.lower().strip()
-        is_blocked_artist = artist_lower not in liked_artists
+        is_blocked_artist = False
+        if args.enable_spotify:
+            is_blocked_artist = artist_lower not in liked_artists
         
         a_resp = requests.get(f"{url}/getArtist", params={**auth_params, 'id': artist_id}).json()
         albums = a_resp.get('subsonic-response', {}).get('artist', {}).get('album', [])
@@ -202,17 +212,46 @@ def main():
             break
             
     if playlist_id:
-        print(" -> Emptying existing playlist to preserve its ID...")
+        print(" -> Updating existing playlist via Delta Update...")
         pl_resp = requests.get(f"{url}/getPlaylist", params={**auth_params, 'id': playlist_id}).json()
         entries = pl_resp.get('subsonic-response', {}).get('playlist', {}).get('entry', [])
         
-        if entries:
-            indices = list(range(len(entries)-1, -1, -1))
-            for i in range(0, len(indices), 50):
-                batch = indices[i:i+50]
+        existing_track_ids = {entry['id'] for entry in entries}
+        target_tracks = set(tracks_to_block)
+        
+        tracks_to_add = target_tracks - existing_track_ids
+        
+        # Build a set of tracks that are explicitly whitelisted
+        whitelisted_track_ids = set()
+        for track in all_tracks:
+            if track['album_whitelisted']:
+                whitelisted_track_ids.add(track['id'])
+                
+        indices_to_remove = []
+        for i, entry in enumerate(entries):
+            # Only remove existing tracks if they are explicitly whitelisted now.
+            # Otherwise, preserve them (e.g., they were blocked by a Spotify run, but this is a cron run).
+            if entry['id'] in whitelisted_track_ids:
+                indices_to_remove.append(i)
+                
+        print(f"Adding {len(tracks_to_add)} new tracks, removing {len(indices_to_remove)} newly whitelisted tracks.")
+        
+        if indices_to_remove:
+            indices_to_remove.sort(reverse=True)
+            for i in range(0, len(indices_to_remove), 50):
+                batch = indices_to_remove[i:i+50]
                 update_params = auth_params.copy()
                 update_params['playlistId'] = playlist_id
                 update_params['songIndexToRemove'] = batch
+                requests.get(f"{url}/updatePlaylist", params=update_params)
+                
+        if tracks_to_add:
+            tracks_to_add_list = list(tracks_to_add)
+            for i in range(0, len(tracks_to_add_list), 50):
+                batch = tracks_to_add_list[i:i+50]
+                update_params = auth_params.copy()
+                update_params['playlistId'] = playlist_id
+                update_params['songIdToAdd'] = batch
                 requests.get(f"{url}/updatePlaylist", params=update_params)
     else:
         c_resp = requests.get(f"{url}/createPlaylist", params={**auth_params, 'name': playlist_name}).json()
@@ -221,19 +260,17 @@ def main():
         if not playlist_id:
             print("Failed to create playlist!")
             sys.exit(1)
-        
-    batch_size = 50
-    for i in range(0, len(tracks_to_block), batch_size):
-        batch = tracks_to_block[i:i+batch_size]
-        update_params = auth_params.copy()
-        update_params['playlistId'] = playlist_id
-        update_params['songIdToAdd'] = batch
-        
-        u_resp = requests.get(f"{url}/updatePlaylist", params=update_params).json()
-        if u_resp.get('subsonic-response', {}).get('status') != 'ok':
-            print(f"Warning: Failed to add batch {i} to playlist.")
             
-    print(f"\nDone! Playlist '{playlist_name}' has been created with {len(tracks_to_block)} tracks.")
+        tracks_to_add_list = list(set(tracks_to_block))
+        print(f"Adding {len(tracks_to_add_list)} tracks to new playlist.")
+        for i in range(0, len(tracks_to_add_list), 50):
+            batch = tracks_to_add_list[i:i+50]
+            update_params = auth_params.copy()
+            update_params['playlistId'] = playlist_id
+            update_params['songIdToAdd'] = batch
+            requests.get(f"{url}/updatePlaylist", params=update_params)
+            
+    print(f"\nDone! Playlist '{playlist_name}' has been updated. Total target tracks: {len(tracks_to_block)}.")
 
 if __name__ == "__main__":
     main()

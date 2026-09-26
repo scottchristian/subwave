@@ -49,6 +49,8 @@ export function StationSection({ data, form, setForm, busy, saveSettings, fieldE
   const save = () => saveSettings({
     station: form.station,
     stationDescription: form.stationDescription,
+    donateEnabled: form.donateEnabled,
+    donateUrl: form.donateUrl,
     timezone: form.timezone,
     locale: form.locale,
     weather: {
@@ -149,6 +151,36 @@ export function StationSection({ data, form, setForm, busy, saveSettings, fieldE
             with the schedule. Never read on air. {form.stationDescription.length}/200.
           </div>
         </div>
+      </Card>
+
+      <Card title="Donations" sub="Listener-facing donation link">
+        <div className="field">
+          <Label>Enable donations</Label>
+          <Seg
+            options={[...ON_OFF]}
+            value={form.donateEnabled ? 'on' : 'off'}
+            onChange={id => setForm(f => ({ ...f, donateEnabled: id === 'on' }))}
+          />
+        </div>
+
+        {form.donateEnabled && (
+          <div className="field">
+            <Label>Donation URL</Label>
+            <Input
+              placeholder="https://buymeacoffee.com/yourstation"
+              value={form.donateUrl}
+              onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                setForm(f => ({ ...f, donateUrl: e.target.value }))
+              }
+              className="w-full"
+              maxLength={512}
+            />
+            <SettingsFieldError path="donateUrl" errors={fieldErrors} />
+            <div className="field-hint">
+              When enabled, a Donate button appears in the player's side rail and opens this URL in a new tab.
+            </div>
+          </div>
+        )}
       </Card>
 
       <Card title="Station location" sub="Private forecast point + what the DJ says on air">
@@ -547,7 +579,7 @@ export function StationSection({ data, form, setForm, busy, saveSettings, fieldE
         onSave={save}
         saveLabel="Save station settings"
         errors={fieldErrors}
-        ownedKeys={['station', 'stationDescription', 'timezone', 'locale', 'weather', 'privacy', 'requests']}
+        ownedKeys={['station', 'stationDescription', 'donateEnabled', 'donateUrl', 'timezone', 'locale', 'weather', 'privacy', 'requests']}
       />
     </>
   );

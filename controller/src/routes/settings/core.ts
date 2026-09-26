@@ -107,6 +107,8 @@ router.get('/settings', requireAdmin, async (req, res) => {
         boundaryFadeMinTrackSeconds: BOUNDARY_MIN_PLAY_SEC + BOUNDARY_TOLERANCE_SEC,
         station: s.station,
         stationDescription: s.stationDescription,
+        donateEnabled: s.donateEnabled,
+        donateUrl: s.donateUrl,
         timezone: s.timezone,
         locale: s.locale,
         theme: s.theme,

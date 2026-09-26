@@ -50,6 +50,10 @@ export interface Show {
   banter: boolean;
   /** Long skill segments may pause music and speak in a real gap. */
   pauseTalk: boolean;
+  /** Allow the DJ to announce the current time. */
+  speakClock: boolean;
+  /** Allow the 'Upcoming Shows' AI skill to tease this show to listeners before it airs. */
+  promoteShow: boolean;
   /** [] = Any: the autonomous mood applies while the show is on air.
    *  Multi-value (#929), all selected moods weighted equally. */
   moods: string[];

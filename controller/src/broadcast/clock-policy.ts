@@ -14,9 +14,14 @@
 
 import * as settings from '../settings.js';
 
-// Absent/non-boolean reads as ON, so an upgrade is byte-identical.
 export function clockEnabled(): boolean {
-  return settings.get()?.djSpeakClock !== false;
+  const s = settings.get();
+  if (s?.djSpeakClock === false) return false;
+
+  const show = settings.resolveActiveShow();
+  if (show && show.speakClock !== true) return false;
+
+  return true;
 }
 
 // May a spoken line state the wall-clock time?

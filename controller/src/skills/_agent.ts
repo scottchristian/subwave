@@ -764,6 +764,47 @@ export async function runCapability(
     return { aired: false, queued: false, deferred: false, text: null, reason };
   };
 
+  // EARLY EXIT: For skills that return a verbatim `script` field (e.g. grog-finder,
+  // waze-alerts, sports-odds, bmac-shoutout), always fetch the tool data first and
+  // short-circuit BEFORE any LLM call — regardless of pickerAgent mode. This is
+  // the only reliable approach: the agent mode's retry loop swallows the error before
+  // the try/catch can recover it, and even in pool mode the LLM can mangle [voice:]
+  // tags. Fetching here adds one extra data call in agent mode for verbatim skills,
+  // but correctness wins over micro-efficiency.
+  if (cap.toolFn && typeof cap.toolFn === 'function') {
+    const earlyData = await fetchSegmentData(cap, ctx, segmentState);
+    const earlyBlocked = standDownReason(cap, earlyData);
+    if (earlyBlocked) return standDown(earlyBlocked);
+    if (earlyData && typeof (earlyData as any).script === 'string' && (earlyData as any).available === true) {
+      const verbatimText = ((earlyData as any).script as string).trim();
+      if (verbatimText) {
+        lastFired.set(cap.kind, Date.now());
+        segmentState.lastAnySegment = Date.now();
+        
+        let announcePersona = persona || automaticHostSpeech ? speaker : null;
+        const voiceMatch = verbatimText.match(/^\[voice:([^\]]+)\]/i);
+        if (voiceMatch) {
+            // Force this announcement to use the remote TTS engine (gemini_tts.py) 
+            // so the [voice:] tag or the specified voice is correctly rendered.
+            announcePersona = {
+                ...(announcePersona || {}),
+                tts: {
+                    ...((announcePersona as any)?.tts || {}),
+                    engine: 'remote',
+                    voice: voiceMatch[1]
+                }
+            } as Persona;
+        }
+
+        const result = await queue.announce(verbatimText, cap.kind, announcePersona
+          ? { persona: announcePersona, meta: { personaId: speaker?.id, personaName: speaker?.name }, pauseTalkEligible }
+          : { pauseTalkEligible });
+        queue.log('scheduler', `[skills] "${cap.kind}" verbatim script aired (bypassed LLM)`);
+        return { aired: !result.deferred, queued: result.accepted, deferred: result.deferred, text: verbatimText, reason: 'verbatim script from tool' };
+      }
+    }
+  }
+
   let object: { reason?: string; air?: boolean; text?: string; sfx?: string | null } | undefined;
   if (!settings.get().llm?.pickerAgent) {
     // Pool mode: fetch the data directly, one structured call. A skill that
@@ -773,20 +814,6 @@ export async function runCapability(
     const data = await fetchSegmentData(cap, ctx, segmentState);
     const blocked = standDownReason(cap, data);
     if (blocked) return standDown(blocked);
-    // Short-circuit when the tool returns a pre-written `script` (e.g. grog-finder).
-    // The script must reach TTS verbatim — passing it through the LLM causes
-    // rewriting that strips [voice:] tags and directive text.
-    if (data && typeof (data as any).script === 'string' && (data as any).available === true) {
-      const verbatimText = ((data as any).script as string).trim();
-      if (verbatimText) {
-        lastFired.set(cap.kind, Date.now());
-        segmentState.lastAnySegment = Date.now();
-        const result = await queue.announce(verbatimText, cap.kind, persona
-          ? { persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name } }
-          : {});
-        return { aired: true, queued: result.accepted, deferred: result.deferred, text: verbatimText, reason: 'verbatim script from tool' };
-      }
-    }
     object = await deadlinedSegmentObject({
       system: forcedSystem(speaker, cap, sfxCatalog, { mayAbstain }),
       prompt: situation + (data && !data.error ? dataBlock(data) : ''),
@@ -804,15 +831,38 @@ export async function runCapability(
     // single usable result clears the run; the reason kept is the last failure.
     let usableSeen = false;
     let blocked: string | null = null;
-    ({ object } = await (mayAbstain ? groundedDirectorAgent : forcedDirectorAgent).run({
-      messages: [{ role: 'user', content: situation }],
-      persona: speaker, cap, sfxCatalog,
-      ctx, segmentState,
-      onData: (_kind: string, data: unknown) => {
-        const why = standDownReason(cap, data as never);
-        if (why) blocked = why; else usableSeen = true;
-      },
-    }));
+    let verbatimScript: string | null = null;
+    
+    try {
+      ({ object } = await (mayAbstain ? groundedDirectorAgent : forcedDirectorAgent).run({
+        messages: [{ role: 'user', content: situation }],
+        persona: speaker, cap, sfxCatalog,
+        ctx, segmentState,
+        onData: (_kind: string, data: unknown) => {
+          const why = standDownReason(cap, data as never);
+          if (why) blocked = why; else usableSeen = true;
+          
+          if (data && typeof (data as any).script === 'string' && (data as any).available === true) {
+            const text = ((data as any).script as string).trim();
+            if (text) verbatimScript = text;
+          }
+        },
+      }));
+    } catch (err: any) {
+      // If the agent crashed (e.g. Nemotron throwing 'Invalid JSON response')
+      // but the tool already returned a verbatim script, we can safely recover.
+      if (!verbatimScript) throw err;
+    }
+
+    if (verbatimScript) {
+      lastFired.set(cap.kind, Date.now());
+      segmentState.lastAnySegment = Date.now();
+      const result = await queue.announce(verbatimScript, cap.kind, (persona || automaticHostSpeech)
+        ? { persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name } }
+        : {});
+      return { aired: true, queued: result.accepted, deferred: result.deferred, text: verbatimScript, reason: 'verbatim script from tool' };
+    }
+
     if (!usableSeen && blocked) return standDown(blocked);
   }
 

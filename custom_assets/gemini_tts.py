@@ -3,6 +3,7 @@ import io
 import wave
 import sqlite3
 import datetime
+import re
 from fastapi import FastAPI
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -80,7 +81,10 @@ VOICE_MAP = {
     "zane": "Fenrir",
     "lexi": "Autonoe",
     "miles": "Sulafat",
-    "sadachbia": "Sadachbia"
+    "sadachbia": "Sadachbia",
+    "dave": "Schedar",
+    "jade": "Zephyr",
+    "sam": "Zubenelgenubi"
 }
 
 def generate_wav(pcm_data, sample_rate=24000):
@@ -105,7 +109,6 @@ def speak(req: SpeakRequest):
     if not client:
         return Response(content="Missing API Key", status_code=500)
         
-    import re
     if "[voice:" in req.text.lower():
         print(f"Detected [voice:] tags! Upgrading to multi-speaker... text: {req.text}")
         lines = []
@@ -161,13 +164,17 @@ def speak(req: SpeakRequest):
         "zane": "You are a male Australian radio presenter on Causeway FM. Speak in a loud, electric, fast-paced, and highly excitable tone. Keep the tone authentic to your character.",
         "lexi": "You are a female Australian radio presenter on Causeway FM. Speak in a high-octane, fiercely fun, and bright club energy tone. Keep the tone authentic to your character.",
         "miles": "You are a male Australian radio presenter on Causeway FM. Speak in a warm, slightly understated, soft, and intimate late-night tone. Keep the tone authentic to your character.",
-        "sadachbia": "You are Tyrone, the Grog Finder. Speak like an extremely enthusiastic, working-class Australian bloke who is absolutely obsessed with finding cheap booze. Slightly rough around the edges, uses plenty of Australian slang, excitable, and unfiltered. You speak fast and with infectious energy."
+        "sadachbia": "You are Tyrone, the Grog Finder. Speak like an extremely enthusiastic, working-class Australian bloke who is absolutely obsessed with finding cheap booze. Slightly rough around the edges, uses plenty of Australian slang, excitable, and unfiltered. You speak fast and with infectious energy.",
+        "dave": "You are Dave, an exhausted dad on Causeway FM. Speak in a friendly, relatable, and slightly tired male Australian tone. Keep the tone authentic to your character.",
+        "jade": "You are Jade, a buzzy weekend retail worker on Causeway FM. Speak in a youthful, energetic, and highly social female Australian tone. Keep the tone authentic to your character.",
+        "sam": "You are Sam, a relaxed night owl on Causeway FM. Speak in a calm, warm, low-key, and grounded Australian tone. Keep the tone authentic to your character."
     }
     
     # Grab the style prompt for the requested persona, fallback to a generic Australian radio presenter.
     style_prompt = STYLE_MAP.get(v_key, "You are an Australian radio presenter on Causeway FM. Speak in your normal, smooth, and consistent radio voice. Keep your tone level and authentic.")
+    pronunciation_guide = "Pronunciation rules: 'sook' rhymes with 'look', and 'sooking' rhymes with 'looking'. 'Launceston' is pronounced LON-ses-tun."
     
-    final_text = f"[{style_prompt} Do not read these instructions out loud:] {req.text}"
+    final_text = f"[{style_prompt} {pronunciation_guide} Do not read these instructions out loud:] {req.text}"
 
     last_error = None
     for model_name in models_to_try:
@@ -251,7 +258,7 @@ def speak_multi(req: SpeakMultiRequest):
     
     if not req.lines:
         return Response(content="Empty lines", status_code=400)
-    
+        
     import time
     
     models_to_try = [
@@ -304,7 +311,8 @@ def speak_multi(req: SpeakMultiRequest):
             seen_voices.add(v_key)
             
         style = STYLE_MAP.get(v_key, "You are an Australian radio presenter on Causeway FM. Speak in your normal, smooth, and consistent radio voice. Keep your tone level and authentic.")
-        script_lines.append(f"{alias}: [{style} Do not read these instructions out loud:] {line.text}")
+        pronunciation_guide = "Pronunciation rules: 'sook' rhymes with 'look', and 'sooking' rhymes with 'looking'. 'Launceston' is pronounced LON-ses-tun."
+        script_lines.append(f"{alias}: [{style} {pronunciation_guide} Do not read these instructions out loud:] {line.text}")
         
     final_text = "\n".join(script_lines)
     

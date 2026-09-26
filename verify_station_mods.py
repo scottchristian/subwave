@@ -76,6 +76,10 @@ def test_prompts():
     code = os.system(ban_cmd + " > /dev/null 2>&1")
     print_result("Banter prompt bans weather", code == 0, "Could not find weather ban in banter.ts")
 
+    sys_cmd3 = "docker exec sub-wave-controller grep -i 'back-announce' /app/src/llm/internal/prompts/scripts.ts"
+    code = os.system(sys_cmd3 + " > /dev/null 2>&1")
+    print_result("Scripts prompt forces back-announce", code == 0, "Could not find back-announce rule in scripts.ts")
+
 def test_gemini_tts():
     print("Testing Gemini TTS...")
     # Verify gemini_tts.py contains our custom maps
@@ -86,6 +90,20 @@ def test_gemini_tts():
     tts_cmd2 = "docker exec sub-wave-gemini-tts grep -i 'speak-multi' gemini_tts.py"
     code = os.system(tts_cmd2 + " > /dev/null 2>&1")
     print_result("Gemini TTS has /speak-multi endpoint", code == 0, "Could not find /speak-multi in gemini_tts.py")
+    
+    tts_cmd3 = "docker exec sub-wave-gemini-tts grep -i 'Pronunciation rules:' gemini_tts.py"
+    code = os.system(tts_cmd3 + " > /dev/null 2>&1")
+    print_result("Gemini TTS has Pronunciation Guide", code == 0, "Could not find Pronunciation guide in gemini_tts.py")
+
+def test_schema_modifications():
+    print("Testing Schema Modifications...")
+    schema_cmd = "docker exec sub-wave-controller grep -i 'speakClock' /app/src/schemas/show.ts"
+    code = os.system(schema_cmd + " > /dev/null 2>&1")
+    print_result("Show schema has speakClock", code == 0, "Could not find speakClock in show.ts")
+    
+    schema_cmd2 = "docker exec sub-wave-controller grep -i 'donateEnabled' /app/src/schemas/settings.ts"
+    code = os.system(schema_cmd2 + " > /dev/null 2>&1")
+    print_result("Settings schema has donateEnabled", code == 0, "Could not find donateEnabled in settings.ts")
 
 if __name__ == "__main__":
     print("Starting Causeway FM Custom Modifications Verification...")
@@ -96,6 +114,7 @@ if __name__ == "__main__":
         test_telemetry_db()
         test_prompts()
         test_gemini_tts()
+        test_schema_modifications()
     else:
         print("Skipping local container/DB tests since we are not running on the Proxmox server.")
     

@@ -137,6 +137,8 @@ export interface NowPlayingResponse {
   llmTokens?: number | null;
   /** Station IANA timezone — render on-air timestamps in it (issue #418). */
   timezone?: string;
+  /** URL for the station's donation page, if enabled. */
+  donateUrl?: string | null;
   /** Station display locale — UK keeps 24-hour time; US uses AM/PM. */
   locale?: StationLocale;
 }

@@ -263,6 +263,8 @@ function showObjectSchema(ctx: ShowSchemaContext) {
       // show-level opt-in: unscheduled/autonomous programming keeps ducking.
       pauseTalk: showBool(),
       programme: showBool(),
+      speakClock: showBool(),
+      promoteShow: showBool(),
       // Free text, resolved against the live skill catalog at air time.
       segmentSkill: z.preprocess(
         nullToUndefined,

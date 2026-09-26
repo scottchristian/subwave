@@ -341,6 +341,7 @@ export function fuzzyAirTime(clock: any): string | null {
 // and other context that this clean boundary is designed to exclude.
 export function linkPrompt({
   current,
+  previous = null,
   context = null,
   clockIsAirTime = false,
   recap = null,
@@ -352,7 +353,9 @@ export function linkPrompt({
   const speaker = persona || settings.getEffectivePersona();
   const rules = [
     'Output only the words to be spoken on air.',
-    'The named track is already playing. Focus on it and do not refer to the previous track.',
+    previous?.title && previous?.artist
+      ? `You MUST first back-announce the track that just finished playing ("${previous.title}" by ${previous.artist}), and then seamlessly transition into introducing the new track on air.`
+      : 'The named track is already playing. Focus on it and do not refer to the previous track.',
     'Treat supplied sleeve notes as verified facts, but do not add or infer further music-history claims.',
     'The supplied day of week is for accuracy, not generic atmosphere. Mention it only when it adds something specific and natural; do not use it as a default opener or repeat it from link to link.',
     'Music facts are limited to the exact entries in Verified facts: do not use remembered or learned album, release, chart, reputation, influence, relationship or history information.',

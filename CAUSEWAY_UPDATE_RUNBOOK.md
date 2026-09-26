@@ -71,6 +71,8 @@ tar -czf "custom_assets/${BACKUP_NAME}" \
   lidarr_sync_server.py \
   missed_requests_server.py \
   navidrome_filter.py \
+  spotify_extract.py \
+  spotify_to_navidrome_playlists.py \
   grog_scraper.py \
   verify_station_mods.py \
   deploy_controller.sh \
@@ -201,9 +203,11 @@ scp /Users/scott/GitHub/subwave/custom_assets/station_ident_default.wav \
 
 ```bash
 scp /Users/scott/GitHub/subwave/lidarr_watchdog.py root@192.168.68.196:/root/subwave/lidarr_watchdog.py
-scp /Users/scott/GitHub/subwave/lidarr_sync_server.py root@192.168.68.196:/root/subwave/lidarr_sync_server.py
-scp /Users/scott/GitHub/subwave/missed_requests_server.py root@192.168.68.196:/root/subwave/missed_requests_server.py
+scp /Users/scott/GitHub/subwave/lidarr_sync_server.py root@192.168.68.196:/root/subwave/lidarr_sync.py
+scp /Users/scott/GitHub/subwave/missed_requests_server.py root@192.168.68.196:/root/subwave/missed_requests.py
 scp /Users/scott/GitHub/subwave/navidrome_filter.py root@192.168.68.196:/root/subwave/navidrome_filter.py
+scp /Users/scott/GitHub/subwave/spotify_extract.py root@192.168.68.196:/root/subwave/spotify_extract.py
+scp /Users/scott/GitHub/subwave/spotify_to_navidrome_playlists.py root@192.168.68.196:/root/subwave/spotify_to_navidrome_playlists.py
 scp /Users/scott/GitHub/subwave/grog_scraper.py root@192.168.68.196:/root/subwave/grog_scraper.py
 ```
 
@@ -311,8 +315,9 @@ Use this as the authoritative guide when resolving merge conflicts in Step 3c. E
 
 ### custom_assets/gemini_tts.py (source of truth for the `subwave-gemini-tts` container)
 **What:** Our completely custom Gemini TTS service. Key additions over the upstream version:
-- `VOICE_MAP` — maps persona slug names (e.g. `jax`, `zane`, `tyrone`/`sadachbia`) to Gemini built-in voice names.
+- `VOICE_MAP` — maps persona slug names (e.g. `jax`, `zane`, `dave`, `jade`, `sam`, `tyrone`/`sadachbia`) to Gemini built-in voice names.
 - `STYLE_MAP` — maps persona slugs to style-prompt instructions that shape how each character sounds.
+- `pronunciation_guide` — hardcoded string injected into all TTS requests containing pronunciation rules for local slang and places (e.g. "sook", "Launceston").
 - `/speak-multi` endpoint — accepts a JSON array of `{voice, text}` objects and renders them in a single Gemini multi-speaker request.
 - Inline `[voice:name]` tag parser in the `/speak` endpoint — detects tags, splits the text, and upgrades the request to use `SpeakMultiRequest` automatically.
 - `GEMINI_BASE_URL` environment variable — routes TTS generation through 9router instead of calling Google directly.
@@ -329,14 +334,21 @@ Use this as the authoritative guide when resolving merge conflicts in Step 3c. E
 **What:** Reads cumulative LLM token spend, TTS character cost, and peak listener count from the SQLite telemetry DB. Applies a 1.50x AUD conversion multiplier to the cost figure before returning it (so the DJ reads it as AUD without being told to convert).
 
 ### missed_requests_server.py
-**What:** Ingests unfulfilled requests from `requests.log`. Uses Gemini via `GEMINI_BASE_URL` on 9router (OpenRouter) to clean up messy conversational requests (e.g. stripping out swear words and banter before searching iTunes).
-**Why:** Without this, messy requests fail iTunes lookup. Also handles "Any" band requests by mapping them generically rather than locking to a specific song.
+**What:** Phase 1 and Phase 2 log parsing. Includes Phase 3 (LLM Cleanup) via 9router (`gemini-3.6-flash`). Specifically modified to handle generic band requests by explicitly telling the LLM to output `{"song": "Any"}` which is then formatted as `some {artist}` to force the iTunes parser to flag it as an artist-only query.
+
+### spotify_extract.py & spotify_to_navidrome_playlists.py
+**What:**
+- `spotify_extract.py`: Captures actual Spotify playlist structures, writing `playlists` and `playlist_tracks` tables into `spotify_library.db` along with Liked Songs. Checks for both `track` and `item` keys to handle undocumented API changes. Note: Spotify API returns 403 Forbidden for public playlists not owned by the user. To sync a third-party playlist, it must first be "cloned" into the user's library.
+- `spotify_to_navidrome_playlists.py`: Reads `spotify_library.db`, fuzzy matches tracks against the Navidrome library (via Subsonic API), and reconstructs the Spotify playlists as Navidrome playlists.
+
+### navidrome_filter.py
+**What:** Handles station-wide track filtering. Scans the local Navidrome library and generates a `Causeway-Blocked` playlist containing any tracks with banned words (e.g., "instrumental", "interlude", "skit", "intro") and artists that do not appear in the user's Spotify Liked Songs, preventing them from airing.
 
 ### lidarr_sync_server.py
-**What:** Syncs the cleaned iTunes requests to Lidarr. For generic band requests, it forces Lidarr to search for missing albums and logs the artist ID so the watchdog can monitor all of their tracks. Also uses `rapidfuzz` to loosely match iTunes titles to Lidarr titles to prevent infinite loops.
+**What:** Syncs the cleaned iTunes requests to Lidarr. For generic band requests, it forces Lidarr to search for missing albums and logs the artist ID so the watchdog can monitor all of their tracks. Also explicitly triggers an `ArtistSearch` POST command to the Lidarr API immediately after adding an artist to force an instant fetch of MusicBrainz metadata. Uses `rapidfuzz` to loosely match iTunes titles to Lidarr titles.
 
 ### lidarr_watchdog.py
-**What:** Monitors Lidarr for newly downloaded tracks and submits them to the Subwave request queue. Must include the `x-station-auth: Midw@y!FM2026` header in all HTTP requests to `/api/request` since the endpoint was locked. Unconditionally pushes the downloaded track to the queue because Icecast's active-listener IP is isolated and cannot be reliably checked.
+**What:** Monitors Lidarr for newly downloaded tracks and submits them to the Subwave request queue. Restarts the `sub-wave-navidrome` container to force an index, waits a deliberate **15 seconds** for Navidrome to boot up, and then unconditionally pushes the track to the queue because Icecast's active-listener IP is isolated and cannot be reliably checked. Must include the `x-station-auth: Midw@y!FM2026` header in all HTTP requests to `/api/request`.
 
 ### controller/src/broadcast/queue.ts
 **What:** Modified `announceExchange()` to attempt batching a multi-speaker banter exchange through `tts.speakExchange()`, airing the result as a single audio clip. Falls back to sequential per-line rendering if the batch fails.
@@ -368,6 +380,7 @@ Use this as the authoritative guide when resolving merge conflicts in Step 3c. E
 **What:** Added a "Skill escape (C2)" block in `runRequestViaAgent` that returns `{ skill: slug }` to the caller when `kind === 'skill'`.
 **Why:** Decouples the skill dispatch from the agent itself so the route can handle it synchronously.
 
+
 ### controller/src/routes/request.ts
 **What:** Added a skill escape handler that calls `runCapability(slug)` when the agent returns a skill slug. The skill airs immediately (over the music, ducked), and its generated text is returned as the listener's ack.
 **Why:** Allows listeners to trigger station skills (weather, grog prices, etc.) via a request.
@@ -383,3 +396,24 @@ Use this as the authoritative guide when resolving merge conflicts in Step 3c. E
 ### web/components/admin/settings/DjBehaviourSection.tsx & shared.tsx
 **What:** Added the "Listener request chat" card with toggle for shout-outs, toggle for skills, and a full-height textarea for the request chat prompt and music request intro prompt.
 **Why:** Operator-editable on the fly, no container restart needed.
+
+### controller/src/llm/internal/prompts/scripts.ts
+**What:** Modified `linkPrompt` to receive a `previous` track, and inject a strict rule telling the DJ: `You MUST first back-announce the track that just finished playing...` instead of the default rule that told the DJ to ignore the previous track.
+**Why:** Makes the AI DJ sound more like a real radio presenter by naturally identifying the song that just ended before introducing the next one.
+
+### Show Schema Customisations (Promo Teases & Time Announcements)
+**What:** 
+- `controller/src/schemas/show.ts`, `web/components/admin/shows/ShowEditor.tsx`, `web/components/admin/ShowsPanel.tsx`, `web/components/admin/shows/types.ts`, and `web/components/admin/shows/lib.ts`: Added `promoteShow` and `speakClock` boolean toggles.
+- Added a custom skill `upcoming-shows` in `state/skills/upcoming-shows/` which scans `/var/sub-wave/schedule.json` (the internal path to the state volume mount inside the container) for the next 7 days and isolates the upcoming shows with `promoteShow: true`. **Note:** Ensure the script looks at `/var/sub-wave/schedule.json` and NOT `/app/state/schedule.json`, otherwise it will silently fail and report "nothing to announce" due to the Docker volume mapping.
+- `controller/src/broadcast/clock-policy.ts`: Modified `clockEnabled()` to read the new `show.speakClock` flag and default to false (disabling the time announcement) unless explicitly enabled on the active show.
+**Why:** Allows the station operator to flag specific shows for on-air teasing, and gives per-show control over whether the AI DJ reads the time of day.
+
+### Donate Button (Player UI)
+**What:** 
+- `controller/src/schemas/settings.ts`, `defaults.ts`, `patch-registry.ts`, `settings.ts`: Added `donateEnabled` (boolean) and `donateUrl` (string) schemas, defaults, and parsing logic.
+- `controller/src/routes/settings/core.ts` & `routes/public.ts`: Exposed the new fields to both the admin API and the public `/now-playing` listener API.
+- `web/components/admin/settings/StationSection.tsx` & `shared.tsx`: Added a "Donations" settings card to the UI.
+- `web/components/admin/settings/registry.ts`: Added `donateEnabled` and `donateUrl` to the `station` section's `formKeys` array so the settings panel detects unsaved changes and shows the Save bar.
+- `web/hooks/useStationFeed.ts` & `web/components/player/PlayerCore.tsx`: Added `donateUrl` to the listener feed context payload.
+- `web/components/skins/classic/DotRail.tsx`: Added a `HandCoins` "Donate" button between the Booth and Request tabs that opens the URL in a new tab when clicked.
+**Why:** Gives listeners an obvious, native button in the side rail to support the station on Patreon/BuyMeACoffee, without hardcoding the URL into the UI so the operator can change it at any time.

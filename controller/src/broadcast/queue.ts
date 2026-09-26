@@ -925,9 +925,20 @@ class Queue {
     // between it and the upcoming.push() below — so it closes the race. -1 lets
     // the caller acknowledge honestly instead of queuing a back-to-back play;
     // `allowDuplicate` opts out an explicit operator action.
-    if (!allowDuplicate && track?.id) {
-      const dominated = this.upcoming.some(i => i.track?.id === track.id)
-        || (this.current?.track?.id === track.id);
+    if (!allowDuplicate && track) {
+      const isMatch = (t1?: any, t2?: any) => {
+        if (!t1 || !t2) return false;
+        if (t1.id && t2.id && t1.id === t2.id) return true;
+        if (t1.title && t2.title && t1.artist && t2.artist) {
+            return t1.title.toLowerCase() === t2.title.toLowerCase() &&
+                   t1.artist.toLowerCase() === t2.artist.toLowerCase();
+        }
+        return false;
+      };
+
+      const dominated = this.upcoming.some(i => isMatch(i.track, track))
+        || isMatch(this.current?.track, track);
+        
       if (dominated) {
         this.log('dedup-skip', `${track.title} -- ${track.artist} (already queued)`);
         return -1;

@@ -63,9 +63,8 @@ def get_gemini_extraction(query, api_key, base_url="https://generativelanguage.g
     url = f"{base_url}/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
     
     prompt = f"""Extract the requested song and artist from the following conversational text.
+If the user is only asking for a band/artist generally (e.g. 'play some Beatles' or 'Lily Allen'), set the song to "Any".
 If it is obviously an ad or not a real song request, return exactly the string "null".
-If the user requests an artist or band in general but does not name a specific song, set "song" to "Any".
-Important context: If the user says "play another live song" or "some live", they likely mean the rock band named "Live", not a live concert recording.
 Text: "{query}"
 Return ONLY a JSON object exactly like this: {{"song": "Song Name", "artist": "Artist Name"}} or the string "null"."""
     
@@ -98,6 +97,8 @@ Return ONLY a JSON object exactly like this: {{"song": "Song Name", "artist": "A
                 
             result = json.loads(text.strip())
             if result and isinstance(result, dict) and "song" in result and "artist" in result:
+                if result['song'].lower() in ["any", "unknown", "", "none"]:
+                    return f"some {result['artist']}"
                 return f"{result['song']} by {result['artist']}"
     except Exception as e:
         print(f"Gemini API Error: {e}")

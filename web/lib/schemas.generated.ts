@@ -2894,6 +2894,13 @@ export const stationDescriptionSchema = settingsTrimmedString(
   `station description must be ${SETTINGS_STATION_DESCRIPTION_MAX} chars or fewer`,
 );
 
+export const SETTINGS_DONATE_URL_MAX = 512;
+export const donateEnabledSchema = z.boolean({ error: 'donateEnabled must be a boolean' });
+export const donateUrlSchema = settingsTrimmedString(
+  SETTINGS_DONATE_URL_MAX,
+  `donateUrl must be ${SETTINGS_DONATE_URL_MAX} chars or fewer`,
+);
+
 export const djHouseRulesSchema = settingsTrimmedString(
   SETTINGS_DJ_HOUSE_RULES_MAX,
   `djHouseRules must be at most ${SETTINGS_DJ_HOUSE_RULES_MAX} chars`,
@@ -3874,6 +3881,8 @@ function showObjectSchema(ctx: ShowSchemaContext) {
       // show-level opt-in: unscheduled/autonomous programming keeps ducking.
       pauseTalk: showBool(),
       programme: showBool(),
+      speakClock: showBool(),
+      promoteShow: showBool(),
       // Free text, resolved against the live skill catalog at air time.
       segmentSkill: z.preprocess(
         nullToUndefined,

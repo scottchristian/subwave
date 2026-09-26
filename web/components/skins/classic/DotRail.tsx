@@ -1,9 +1,10 @@
 'use client';
 
-import { isValidElement, memo, type ReactNode } from 'react';
+import { Fragment, isValidElement, memo, type ReactNode } from 'react';
 import { m } from 'motion/react';
 import { cn } from '@/lib/cn';
 import OdometerNumber from '@/components/OdometerNumber';
+import { HandCoins } from 'lucide-react';
 import type { PlayerDrawer } from './CommandPalette';
 
 interface RailItem {
@@ -21,11 +22,12 @@ const ITEMS: readonly RailItem[] = [
 export interface DotRailProps {
   /** Counts (or icon nodes) keyed by drawer id. `request` is rendered as "+" regardless. */
   counts?: Partial<Record<PlayerDrawer, ReactNode>>;
+  donateUrl?: string | null;
   active: PlayerDrawer | null;
   onSelect: (id: PlayerDrawer | null) => void;
 }
 
-export default memo(function DotRail({ counts, active, onSelect }: DotRailProps) {
+export default memo(function DotRail({ counts, donateUrl, active, onSelect }: DotRailProps) {
   return (
     <div
       // Slimmed on phones; CenterStage's right reserve tracks these widths.
@@ -36,7 +38,7 @@ export default memo(function DotRail({ counts, active, onSelect }: DotRailProps)
         const isRequest = item.k === 'request';
         const n: ReactNode = isRequest ? '+' : (counts?.[item.k] ?? 0);
         const isIcon = isValidElement(n);
-        return (
+        const btn = (
           <button
             key={item.k}
             onClick={() => onSelect(isActive ? null : item.k)}
@@ -79,6 +81,30 @@ export default memo(function DotRail({ counts, active, onSelect }: DotRailProps)
             </span>
           </button>
         );
+
+        if (item.k === 'booth' && donateUrl) {
+          return (
+            <Fragment key="booth-group">
+              {btn}
+              <div className="py-2 w-full">
+                <button
+                  onClick={() => window.open(donateUrl, '_blank', 'noopener,noreferrer')}
+                  className="v3-focus flex w-full cursor-pointer flex-col items-center gap-[6px] border-0 px-1 py-[14px] font-[inherit] sm:px-2 bg-amber-500/8 text-amber-500 shadow-[inset_2px_0_0_rgba(245,158,11,0.5)]"
+                  aria-label="Donate — opens in a new tab"
+                >
+                  <span className="v3-tab-num relative inline-flex h-[22px] items-center justify-center leading-none text-amber-500">
+                    <HandCoins size={18} strokeWidth={1.5} />
+                  </span>
+                  <span className="relative text-[8px] font-bold tracking-[0.2em] uppercase text-amber-500 sm:text-[9px] sm:tracking-[0.3em]">
+                    Donate
+                  </span>
+                </button>
+              </div>
+            </Fragment>
+          );
+        }
+        
+        return btn;
       })}
     </div>
   );

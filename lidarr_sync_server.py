@@ -197,6 +197,11 @@ def sync_requests(db_path, api_url, api_key):
 
             if album_name == "Any":
                 logger.info(f"Generic artist request for {artist_name}. Artist added, marking as sent with ARTIST:{artist_id}.")
+                try:
+                    requests.post(f"{api_url}/api/v1/command", json={"name": "ArtistSearch", "artistId": artist_id}, headers={'X-Api-Key': api_key})
+                    logger.info(f"Triggered ArtistSearch command for artistId={artist_id}")
+                except Exception as e:
+                    logger.error(f"Failed to trigger ArtistSearch: {e}")
                 cursor.execute("UPDATE missed_requests SET sent_to_lidarr = 1, lidarr_album_id = ? WHERE id = ?", (f"ARTIST:{artist_id}", rowid,))
                 conn.commit()
                 continue

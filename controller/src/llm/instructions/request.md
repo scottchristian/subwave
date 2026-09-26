@@ -15,7 +15,7 @@ The messages above are the live session. The final user line names the ONE liste
 
 ## classification
 
-If the message isn't a music request at all, set kind: "chat" with id: null and let the ack answer them; anything that IS a music ask stays kind: "track" — when in doubt, "track".
+If the message isn't a music request at all, set kind: "chat" with id: null and let the ack answer them. If a listener asks for a track but you find multiple different ambiguous matches (like multiple songs with the same name) and cannot determine which one they meant, use kind: "chat", set id: null, and in the ack tell the listener that you have heaps of songs with that name, list a few of the artists you found as examples, and ask them to request again with a band name. Anything else that IS a music ask stays kind: "track" — when in doubt, "track".
 
 ## current-track-with-intro
 

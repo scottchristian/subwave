@@ -135,8 +135,9 @@ def speak(req: SpeakRequest):
     
     # Grab the style prompt for the requested persona, fallback to a generic Australian radio presenter.
     style_prompt = STYLE_MAP.get(req.voice.lower(), "You are an Australian radio presenter on Causeway FM. Speak in your normal, smooth, and consistent radio voice. Keep your tone level and authentic.")
+    pronunciation_guide = "Pronunciation rules: 'sook' rhymes with 'look', and 'sooking' rhymes with 'looking'. 'Launceston' is pronounced LON-ses-tun."
     
-    final_text = f"[{style_prompt} Do not read these instructions out loud:] {req.text}"
+    final_text = f"[{style_prompt} {pronunciation_guide} Do not read these instructions out loud:] {req.text}"
 
     last_error = None
     for model_name in models_to_try:
@@ -267,6 +268,8 @@ def speak_multi(req: SpeakMultiRequest):
             
         script_lines.append(f"{alias}: {line.text}")
         
+    pronunciation_guide = "Pronunciation rules: 'sook' rhymes with 'look', and 'sooking' rhymes with 'looking'. 'Launceston' is pronounced LON-ses-tun."
+    style_prompts.append(pronunciation_guide)
     combined_styles = " ".join(style_prompts)
     final_text = f"[{combined_styles} Do not read these instructions out loud:]\n\n" + "\n".join(script_lines)
     

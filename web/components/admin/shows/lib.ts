@@ -31,6 +31,8 @@ export function hydrateShow(s: Partial<Show>): Show {
     guestPersonaIds: Array.isArray(m.guestPersonaIds) ? m.guestPersonaIds : [],
     banter: m.banter ?? false,
     pauseTalk: m.pauseTalk ?? false,
+    speakClock: m.speakClock ?? false,
+    promoteShow: m.promoteShow ?? false,
     moods: Array.isArray(m.moods) ? m.moods : [],
     themeId: m.themeId ?? '',
     genres: Array.isArray(m.genres) ? m.genres.map(g => String(g).trim()).filter(Boolean) : [],
@@ -102,6 +104,8 @@ export function showPayload(s: Show) {
     // Banter only means something with guests in the studio.
     banter: (s.guestPersonaIds?.length ?? 0) > 0 && s.banter,
     pauseTalk: s.pauseTalk === true,
+    speakClock: s.speakClock === true,
+    promoteShow: s.promoteShow === true,
     moods: s.moods,
     themeId: s.themeId || '',
     genres: s.genres.map(g => g.trim()).filter(Boolean),

@@ -407,6 +407,24 @@ export function ShowEditor({
           <Field>
             <SwitchField
               control={control}
+              name={path('speakClock')}
+              label="Time checks"
+              description="Allow the DJ to announce the current time. If the global station setting is off, this is ignored."
+            />
+          </Field>
+
+          <Field>
+            <SwitchField
+              control={control}
+              name={path('promoteShow')}
+              label="Promote Show on Air"
+              description="Allow the 'Upcoming Shows' AI skill to tease this show to listeners before it airs."
+            />
+          </Field>
+
+          <Field>
+            <SwitchField
+              control={control}
               name={path('programme')}
               label="Programme (produced episode)"
               description="The DJ produces each airing as a full episode from the topic brief: an intro up top, a planned feature mid-hour, and a sign-off in the closing minutes. Fresh angle every episode."

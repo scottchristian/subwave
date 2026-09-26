@@ -74,6 +74,10 @@ def main():
         print(f"File downloaded for {song_name}! Triggering scan...")
         trigger_navidrome_scan()
 
+        import time
+        print("Waiting 15 seconds for Navidrome to boot and scan...")
+        time.sleep(15)
+
         print(f"Submitting request for {song_name} by {artist} to the station...")
         
         display_name = requester if (requester and requester.lower() != 'anon') else 'Someone'
