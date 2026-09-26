@@ -198,16 +198,21 @@ export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch, forceNoT
                           const toolSchema = reqTools.find((t: any) => t?.function?.name === tc.function?.name);
                           const props = toolSchema?.function?.parameters?.properties;
                           
-                          if (props && (props.text || props.say || props.reason || props.query)) {
+                          if (props && (props.text || props.say || props.reason || props.query || props.ack || props.kind)) {
                             const synthArgs: Record<string, any> = {};
                             if (props.id)     synthArgs.id     = `synth-${Date.now()}`;
                             if (props.reason) synthArgs.reason = 'auto';
                             if (props.air)    synthArgs.air    = true;
                             if (props.say)    synthArgs.say    = raw;
                             if (props.text)   synthArgs.text   = raw;
+                            if (props.ack)    synthArgs.ack    = raw;
+                            if (props.kind)   synthArgs.kind   = 'track';
                             if (props.transition) synthArgs.transition = 'auto';
                             if (props.sfx)    synthArgs.sfx    = null;
                             if (props.query)  synthArgs.query  = raw;
+                            if (props.skill)  synthArgs.skill  = null;
+                            if (props.intro)  synthArgs.intro  = raw;
+                            if (props.segment) synthArgs.segment = { kind: 'chat', text: raw, sfx: null };
                             
                             tc.function.arguments = JSON.stringify(synthArgs);
                             mutated = true;
@@ -264,14 +269,22 @@ export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch, forceNoT
                         // ignore parse failure, fallback to raw string mapping
                       }
 
-                      const synthArgs: Record<string, any> = {};
-                      if (props.id)     synthArgs.id     = parsedFromContent?.id ?? `synth-${Date.now()}`;
-                      if (props.reason) synthArgs.reason = parsedFromContent?.reason ?? 'auto';
-                      if (props.air)    synthArgs.air    = parsedFromContent?.air ?? true;
-                      if (props.say)    synthArgs.say    = parsedFromContent?.say ?? content;
-                      if (props.text)   synthArgs.text   = parsedFromContent?.text ?? (parsedFromContent?.parameters?.text ?? content);
-                      if (props.transition) synthArgs.transition = parsedFromContent?.transition ?? 'auto';
-                      if (props.sfx)    synthArgs.sfx    = parsedFromContent?.sfx ?? null;
+                      const synthArgs: Record<string, any> = parsedFromContent ? { ...parsedFromContent } : {};
+                      if (!parsedFromContent) {
+                        if (props.id)     synthArgs.id     = `synth-${Date.now()}`;
+                        if (props.reason) synthArgs.reason = 'auto';
+                        if (props.air)    synthArgs.air    = true;
+                        if (props.say)    synthArgs.say    = content;
+                        if (props.text)   synthArgs.text   = content;
+                        if (props.ack)    synthArgs.ack    = content;
+                        if (props.kind)   synthArgs.kind   = 'track';
+                        if (props.transition) synthArgs.transition = 'auto';
+                        if (props.sfx)    synthArgs.sfx    = null;
+                        if (props.query)  synthArgs.query  = content;
+                        if (props.skill)  synthArgs.skill  = null;
+                        if (props.intro)  synthArgs.intro  = content;
+                        if (props.segment) synthArgs.segment = { kind: 'chat', text: content, sfx: null };
+                      }
 
                       msg.tool_calls = [{
                         id: `synth-${Date.now()}`,

@@ -259,6 +259,8 @@ ${frame}${settings.agentLanguageReminder(persona, wantIntro ? 'the "ack" and "in
 
 ${LISTENER_TEXT_CLAUSE}${dj.REQUESTER_GREETING_CLAUSE}${dj.REQUESTER_NAME_CLAUSE} ${instruction('request', 'classification')}${chatClause}${trackClause}${skillClause}
 
-${currentTrack}`;
+${currentTrack}
+
+You now have everything you need. Respond ONLY by calling the terminal tool (like \`done\` or \`emit\`) with your final answer — do not write a normal text message.`;
 }
 
