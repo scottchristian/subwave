@@ -541,8 +541,42 @@ async function resolveRequest(entry) {
         seen.add(s.id);
         return true;
       });
-      pick = randomFresh(unique);
-      if (pick) pickSource = 'search';
+      // When an artist was named, prefer their tracks before the open lottery:
+      // a title word like "Friends" exists across artists, and a blind pick
+      // can air Led Zeppelin for a Matchbox Twenty ask (artistMiss filler).
+      if (matched.artist) {
+        const want = matched.artist.toLowerCase().trim();
+        const artistHits = unique.filter((s: any) => {
+          const got = String(s?.artist || '').toLowerCase();
+          return got && (got.includes(want) || want.includes(got)
+            || want.split(/\s+/).some(t => t.length >= 3 && got.includes(t)));
+        });
+        if (artistHits.length > 0) {
+          // Title still decides within the artist: a named title that matches
+          // nothing of theirs is a miss, not a neighbouring track.
+          const titleTerms = terms.filter((t: string) => t.toLowerCase().trim() !== want);
+          const titleHits = titleTerms.length > 0
+            ? artistHits.filter((s: any) => {
+              const title = String(s?.title || '').toLowerCase();
+              return titleTerms.some((t: string) => {
+                const term = t.toLowerCase().trim();
+                return term && (title.includes(term) || term.includes(title));
+              });
+            })
+            : artistHits;
+          pick = randomFresh(titleHits.length > 0 ? titleHits : []);
+          if (pick) pickSource = 'search:artist';
+          else {
+            entry.artistMiss = matched.artist;
+            queue.log('miss', `Requested "${terms.join(' ')}" — ${matched.artist} has nothing by that title; not substituting across artists`);
+            return failed(sorryNoMatch(requester));
+          }
+        }
+      }
+      if (!pick) {
+        pick = randomFresh(unique);
+        if (pick) pickSource = 'search';
+      }
     }
   }
 

@@ -17,9 +17,91 @@ def is_fuzzy_match(title1, title2, threshold=0.8):
 LIDARR_URL = "http://192.168.68.191:8686"
 LIDARR_API_KEY = "3aa1ec1352f841cd9ba28646a901a37d"
 
-def trigger_navidrome_scan():
-    os.system("docker restart sub-wave-navidrome")
+# Navidrome (same box): trigger a library scan via the Subsonic API instead of
+# restarting the container — a restart risks interrupting a track mid-fetch,
+# the scan does not.
+NAVIDROME_URL = "http://localhost:4533/rest"
+NAVIDROME_USER = "admin"
+NAVIDROME_PASS = "P@ssword11"
 
+STATION_URL = "http://localhost:7700/api"
+STATION_AUTH = "Midw@y!FM2026"
+
+import hashlib
+import random as _random
+import string as _string
+import time
+
+
+def _navidrome_auth():
+    salt = "".join(_random.choice(_string.ascii_letters) for _ in range(8))
+    token = hashlib.md5((NAVIDROME_PASS + salt).encode()).hexdigest()
+    return {"u": NAVIDROME_USER, "t": token, "s": salt, "v": "1.16.1", "c": "lidarr-watchdog", "f": "json"}
+
+
+def trigger_navidrome_scan(timeout_sec=180):
+    """Start a Navidrome quick scan and wait until it finishes. Returns True
+    when the library is fresh — the re-request must not fire before this, or
+    it resolves against a stale index and burns the retry as fulfilled."""
+    try:
+        requests.get(f"{NAVIDROME_URL}/startScan.view", params=_navidrome_auth(), timeout=15)
+    except Exception as e:
+        print("Navidrome startScan failed:", e)
+        return False
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        try:
+            r = requests.get(f"{NAVIDROME_URL}/getScanStatus.view", params=_navidrome_auth(), timeout=15).json()
+            status = r.get("subsonic-response", {}).get("scanStatus", {})
+            if not status.get("scanning", False):
+                print("Navidrome scan complete.")
+                return True
+        except Exception as e:
+            print("Navidrome scan poll error:", e)
+        time.sleep(5)
+    print("Navidrome scan timed out — proceeding anyway.")
+    return False
+
+
+
+def await_match(request_id, song_name, artist, timeout_sec=120):
+    """Poll GET /request/:id until resolved, then confirm the picked track is
+    actually ours: artist must fuzzy-match (any request), and a specific song
+    title must fuzzy-match too. Returns False on timeout, failure, or filler —
+    the row stays open and the next cron minute retries."""
+    specific = str(song_name or "").lower() not in ["any", "unknown", ""]
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        try:
+            r = requests.get(
+                f"{STATION_URL}/request/{request_id}",
+                headers={"x-station-auth": STATION_AUTH},
+                timeout=15,
+            )
+            if r.status_code != 200:
+                time.sleep(5)
+                continue
+            body = r.json()
+            if body.get("status") == "pending":
+                time.sleep(5)
+                continue
+            if not body.get("success") or not body.get("track"):
+                print(f"Request {request_id[:8]} ended without a track: {body.get('message')}")
+                return False
+            track = body["track"]
+            if not is_fuzzy_match(artist, track.get("artist", "")):
+                print(f"Request {request_id[:8]} matched {track.get('title')} by {track.get('artist')} — not ours.")
+                return False
+            if specific and not is_fuzzy_match(song_name, track.get("title", "")):
+                print(f"Request {request_id[:8]} matched {track.get('title')} — title miss.")
+                return False
+            print(f"Request {request_id[:8]} matched {track.get('title')} by {track.get('artist')}.")
+            return True
+        except Exception as e:
+            print("Match poll error:", e)
+            time.sleep(5)
+    print(f"Request {request_id[:8]} still pending after {timeout_sec}s — leaving open.")
+    return False
 
 
 def main():
@@ -74,31 +156,37 @@ def main():
         print(f"File downloaded for {song_name}! Triggering scan...")
         trigger_navidrome_scan()
 
-        import time
-        print("Waiting 15 seconds for Navidrome to boot and scan...")
-        time.sleep(15)
-
         print(f"Submitting request for {song_name} by {artist} to the station...")
-        
+
         display_name = requester if (requester and requester.lower() != 'anon') else 'Someone'
         request_text = f"{display_name} asked for this song before, so we sent someone out to go and get it, and now we do, so this one goes out to you {display_name}. Please play {song_name} by {artist}"
 
         queue_resp = requests.post(
-            "http://localhost:7700/api/request",
-            headers={"Content-Type": "application/json", "X-Forwarded-For": req_ip or "127.0.0.1", "x-station-auth": "Midw@y!FM2026"},
+            f"{STATION_URL}/request",
+            headers={"Content-Type": "application/json", "X-Forwarded-For": req_ip or "127.0.0.1", "x-station-auth": STATION_AUTH},
             json={
                 "text": request_text,
                 "name": requester
             }
         )
         print("Queue response:", queue_resp.status_code, queue_resp.text)
-        
+
         if queue_resp.status_code == 429:
             print("Rate limited or queued. Will try again next minute.")
             continue # Do not mark fulfilled so we can retry!
 
-        c.execute("UPDATE missed_requests SET fulfilled = 1 WHERE id = ?", (req_id,))
-        conn.commit()
+        # Verify the station actually matched OUR song before marking fulfilled.
+        # A re-request that resolves to filler (artistMiss) must stay open so
+        # the next minute retries — otherwise the download never airs.
+        try:
+            req_id = queue_resp.json().get("requestId")
+        except Exception:
+            req_id = None
+        if req_id and await_match(req_id, song_name, artist):
+            c.execute("UPDATE missed_requests SET fulfilled = 1 WHERE id = ?", (req_id,))
+            conn.commit()
+        elif req_id:
+            print(f"Station did not match {song_name} by {artist} yet — leaving open for retry.")
 
 if __name__ == "__main__":
     main()
