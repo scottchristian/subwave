@@ -97,6 +97,9 @@ interface EngineVoiceFieldsProps {
   cloudIssue?: ReactNode;
   engineHint?: ReactNode;
   previewHint?: ReactNode;
+  // Delivery directive the sample button auditions (persona voiceStyle).
+  // Only the remote engine reads it.
+  previewStyle?: string;
   // Personas only: offer "Station default" (the 'inherit' engine). The station
   // rescue slot must not — 'inherit' there names the rung below it in the
   // chain. When set, the caller also supplies the note shown while it is picked.
@@ -112,7 +115,7 @@ interface EngineVoiceFieldsProps {
 
 export function EngineVoiceFields({
   value, onChange, data, adminFetch,
-  previewSpeed, previewLanguage,
+  previewSpeed, previewLanguage, previewStyle,
   unavailableNote, cloudIssue, engineHint, previewHint,
   allowInherit = false, inheritNote, inheritResolvesTo,
 }: EngineVoiceFieldsProps) {
@@ -548,6 +551,7 @@ export function EngineVoiceFields({
           cloudProvider={effective.cloudProvider}
           speed={previewSpeed}
           language={previewLanguage}
+          style={previewStyle}
           adminFetch={adminFetch}
         />
         {previewHint && <div className="field-hint mt-1.5">{previewHint}</div>}

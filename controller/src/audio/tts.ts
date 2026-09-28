@@ -241,11 +241,14 @@ async function speakWith(engine: string, text: string, opts: any, personaTts: an
   }
   if (engine === 'remote') {
     // `voice` is forwarded as-is; the endpoint interprets it and owns its
-    // own defaults, so there is no global fallback voice here.
+    // own defaults, so there is no global fallback voice here. `voiceStyle`
+    // rides the same way: the persona's delivery directive, or empty for the
+    // endpoint's built-in style.
     const voice = (personaTts && personaTts.engine === 'remote' && personaTts.voice)
       ? personaTts.voice
       : undefined;
-    return remoteTts.speak(text, { ...opts, voice });
+    const style = typeof opts.voiceStyle === 'string' ? opts.voiceStyle : undefined;
+    return remoteTts.speak(text, { ...opts, voice, style });
   }
   // piper `voice` is an .onnx filename; empty → the baked-in default voice.
   const voice = (personaTts && personaTts.engine === 'piper' && personaTts.voice)
@@ -263,7 +266,7 @@ const PREVIEW_TEXT_MAX = 200;
 const DEFAULT_PREVIEW_TEXT = "You're listening to SUB/WAVE. This is a voice preview.";
 
 export async function synthesizeSample(
-  { engine, voice = '', cloudProvider = 'openai', cloudModel, speed, lang, language, text, corrections, voiceSettings, fishSettings: requestedFishSettings, signal }: {
+  { engine, voice = '', cloudProvider = 'openai', cloudModel, speed, lang, language, text, corrections, voiceSettings, fishSettings: requestedFishSettings, signal, style }: {
     engine: string;
     voice?: string;
     cloudProvider?: string;
@@ -293,6 +296,9 @@ export async function synthesizeSample(
       latency?: 'low' | 'normal' | 'balanced';
     };
     signal?: AbortSignal;
+    // Delivery directive to audition (persona voiceStyle). Only the remote
+    // engine reads it; empty means the endpoint's built-in style.
+    style?: string;
   },
 ): Promise<string> {
   if (!ENGINES.includes(engine)) throw new Error(`Unknown engine: ${engine}`);
@@ -345,7 +351,7 @@ export async function synthesizeSample(
         : settings.get().tts?.cloud?.latency || 'normal',
     };
   }
-  return speakWith(engine, sample, { speedScale: scale, language: '', soul: '', lang, cloudModel: previewCloudModel, cloudVoiceSettings, fishSettings, signal }, personaTts);
+  return speakWith(engine, sample, { speedScale: scale, language: '', soul: '', lang, cloudModel: previewCloudModel, cloudVoiceSettings, fishSettings, signal, voiceStyle: style }, personaTts);
 }
 
 // Public entry point. Tries the configured engine; on failure falls back so the
@@ -392,6 +398,11 @@ export async function speak(
   const soul = GLOBAL_VOICE_KINDS.has(kind)
     ? ''
     : String(personaFor(persona)?.soul || '').trim();
+  // Delivery directive for the remote engine (accent, pace, energy). DJ-voiced
+  // kinds only; empty means the endpoint's built-in style for that voice.
+  const voiceStyle = GLOBAL_VOICE_KINDS.has(kind)
+    ? ''
+    : String((speakingPersona as any)?.voiceStyle || '').trim();
   const scale = speechPaceScale(kind, persona, speedScale);
   const started = Date.now();
   const chars = (speakText || '').length;
@@ -403,7 +414,7 @@ export async function speak(
     persona: GLOBAL_VOICE_KINDS.has(kind) ? null : (personaFor(persona)?.name || null),
   };
   try {
-    const result = await speakWith(primary, primaryText, { outPath, speedScale: scale, language, soul }, primaryPersonaTts);
+    const result = await speakWith(primary, primaryText, { outPath, speedScale: scale, language, soul, voiceStyle }, primaryPersonaTts);
     // Bake 40ms edge fades in so hard file boundaries never reach the broadcast
     // compressor as a click. Render time is the only place the tail can be
     // faded. Best-effort: non-WAV output (cloud mp3) is left as-is.
@@ -435,7 +446,7 @@ export async function speak(
         // the credentials the chain probe just rejected. What rides is the
         // slot's own override (null for hardcoded rungs, the operator's
         // engine+voice for their configured one), so probe and call agree.
-        const result = await speakWith(fallback, rescueText, { outPath, speedScale: scale, language, soul }, slot.personaTts);
+        const result = await speakWith(fallback, rescueText, { outPath, speedScale: scale, language, soul, voiceStyle }, slot.personaTts);
         if (typeof result === 'string') await applyEdgeFades(result);
         recordTts({
           ...callBase, engine: fallback, fellBack: true,

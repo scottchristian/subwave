@@ -75,6 +75,7 @@ export function PersonaVoiceCard({
             adminFetch={adminFetch}
             previewSpeed={previewSpeed}
             previewLanguage={persona.language}
+            previewStyle={persona.voiceStyle || undefined}
             cloudIssue={cloudIssueText && (
               <>
                 <strong>This cloud voice won’t play.</strong> {cloudIssueText}{' '}

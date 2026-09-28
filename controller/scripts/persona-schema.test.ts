@@ -573,6 +573,7 @@ test('anything the strict path accepts, the lenient path returns unchanged', () 
     localColour: 2,
     warmth: 7,
     soul: 'dry and specific',
+    voiceStyle: 'broad Australian accent, dry and specific',
     language: 'Turkish',
     avatar: 'p_rich.webp',
     tts: { engine: 'kokoro', cloudProvider: 'openai', voice: 'bf_isabella', gainDb: 1.5, speed: 1.1 },
@@ -583,6 +584,14 @@ test('anything the strict path accepts, the lenient path returns unchanged', () 
   const lenient = normalize.normalizePersonaArray([rich])!;
   assert.deepEqual(strict, lenient);
   assert.deepEqual(strict[0], rich, 'a fully-specified persona round-trips byte-for-byte');
+});
+
+test('voiceStyle is optional, capped, and never reaches the writing prompt', () => {
+  const [p] = validate.validatePersonasStrict([{ ...base(), voiceStyle: '  broad Australian accent  ' }]);
+  assert.equal(p.voiceStyle, 'broad Australian accent');
+  const [empty] = validate.validatePersonasStrict([{ ...base() }]);
+  assert.equal(empty.voiceStyle, '');
+  assert.throws(() => validate.validatePersonasStrict([{ ...base(), voiceStyle: 'x'.repeat(301) }]), /voiceStyle/);
 });
 
 // ── tags: organisation only, and the one list that REFUSES a bad entry ───────

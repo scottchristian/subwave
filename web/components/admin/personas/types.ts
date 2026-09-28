@@ -30,6 +30,9 @@ export interface Persona {
   localColour: number;
   warmth: number;
   soul: string;
+  // Delivery directive for the TTS voice (accent, pace, energy). Empty = the
+  // sidecar's built-in style for that voice.
+  voiceStyle: string;
   // Free-text on-air language ("Turkish", "Türkçe"). Empty = English (no
   // directive injected server-side).
   language: string;

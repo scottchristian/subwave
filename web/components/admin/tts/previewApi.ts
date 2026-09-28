@@ -21,6 +21,9 @@ export interface PreviewParams {
   // Explicit sample text, overriding both the default sentence and the
   // language-localized one. Truncated server-side at PREVIEW_TEXT_MAX (200).
   text?: string;
+  // Delivery directive to audition (persona voiceStyle). Only the remote
+  // engine reads it.
+  style?: string;
   // Unsaved corrections override (admin "Test corrections" button, Moods →
   // Speech tab) — tests the tab's CURRENT rows, saved or not.
   corrections?: { from: string; to: string }[];

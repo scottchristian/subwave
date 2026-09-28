@@ -707,6 +707,9 @@ export const PERSONA_TAGLINE_MAX = 80;
 export const PERSONA_LANGUAGE_MAX = 60;
 // A soul rides in the system prompt on every call: a per-call token cost.
 export const PERSONA_SOUL_MAX = 2000;
+// Delivery directive for the TTS voice (accent, pace, energy). Short by
+// design: long character blocks cause voice drift on 3.8 TTS.
+export const PERSONA_VOICE_STYLE_MAX = 300;
 export const PERSONA_SKILLS_LIMIT = 64;
 
 // Freeform organisation tags. Third copy of one pattern (skill.ts, show.ts) —
@@ -1051,6 +1054,7 @@ export interface PersonaParsed {
   localColour: number;
   warmth: number;
   soul: string;
+  voiceStyle: string;
   language: string;
   avatar: string;
   tts: TtsVoiceSlot;
@@ -1103,6 +1107,10 @@ export const personaSchema = z
   .object({
     name: personaCoercedText('name', 1, PERSONA_NAME_MAX),
     soul: personaCoercedText('soul', 1, PERSONA_SOUL_MAX),
+    // Optional delivery directive for the TTS voice (accent, pace, energy).
+    // Absent/empty → the sidecar's built-in style for that voice. Coerced
+    // like soul: a non-string from an older admin build reads as empty.
+    voiceStyle: personaCoercedText('voiceStyle', 0, PERSONA_VOICE_STYLE_MAX),
     tagline: personaCoercedText('tagline', 0, PERSONA_TAGLINE_MAX),
     // Optional free text. Absent/empty → '' (English, no directive injected).
     // Unlike name/soul this REFUSES a non-string instead of coercing.
@@ -1210,6 +1218,7 @@ export const personaSchema = z
       localColour: p.localColour,
       warmth: p.warmth,
       soul: p.soul,
+      voiceStyle: p.voiceStyle,
       language: p.language,
       avatar: p.avatar,
       tts: p.tts,
@@ -1242,6 +1251,10 @@ export function repairPersonaForLoad(
     id: typeof raw.id === 'string' && PERSONA_ID_RE.test(raw.id) ? raw.id : undefined,
     name: typeof raw.name === 'string' ? raw.name.trim().slice(0, PERSONA_NAME_MAX) : undefined,
     soul: typeof raw.soul === 'string' ? raw.soul.trim().slice(0, PERSONA_SOUL_MAX) : undefined,
+    voiceStyle:
+      typeof raw.voiceStyle === 'string'
+        ? raw.voiceStyle.trim().slice(0, PERSONA_VOICE_STYLE_MAX)
+        : undefined,
     tagline:
       typeof raw.tagline === 'string' ? raw.tagline.trim().slice(0, PERSONA_TAGLINE_MAX) : '',
     language:
