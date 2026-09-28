@@ -700,6 +700,46 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             </div>
           </div>
 
+          {form.llm.provider === 'google' && (
+          <div className="field">
+            <Label>Gemini safety filters</Label>
+            <div className="mt-2 flex flex-col gap-2">
+              {[
+                { id: 'harassment', label: 'Harassment' },
+                { id: 'hateSpeech', label: 'Hate Speech' },
+                { id: 'sexuallyExplicit', label: 'Sexually Explicit' },
+                { id: 'dangerousContent', label: 'Dangerous Content' },
+              ].map(c => (
+                <label key={c.id} className="flex cursor-pointer items-center gap-2 text-[13px] leading-[1.5] text-ink">
+                  <input
+                    type="checkbox"
+                    checked={!!form.llm.geminiSafety?.[c.id as keyof typeof form.llm.geminiSafety]}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({
+                        ...f,
+                        llm: {
+                          ...f.llm,
+                          geminiSafety: {
+                            ...(f.llm.geminiSafety || { harassment: false, hateSpeech: false, sexuallyExplicit: false, dangerousContent: false }),
+                            [c.id]: e.target.checked
+                          }
+                        }
+                      }))
+                    }
+                    className="accent-[var(--accent)]"
+                  />
+                  <span>{c.label}</span>
+                </label>
+              ))}
+            </div>
+            <div className="field-hint mt-2">
+              Google-only content blocking, applied on the native <code>google</code> provider
+              leg and the Gemini TTS sidecar. Other providers ignore it.
+              By default, Gemini heavily filters output — uncheck to allow swearing or sensitive topics.
+            </div>
+          </div>
+          )}
+
           {primaryKeyVar && (
             <KeyStatus envVar={primaryKeyVar} present={!!data.env?.[primaryKeyVar]} />
           )}
@@ -1160,46 +1200,6 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           </div>
         </div>
       </Card>
-
-      {(form.llm.provider === 'google' || form.llm.fallback?.provider === 'google') && (
-      <Card title="Gemini Safety Filters" sub="content blocking">
-        <div className="field">
-          <Label>Block categories</Label>
-          <div className="mt-2 flex flex-col gap-2">
-            {[
-              { id: 'harassment', label: 'Harassment' },
-              { id: 'hateSpeech', label: 'Hate Speech' },
-              { id: 'sexuallyExplicit', label: 'Sexually Explicit' },
-              { id: 'dangerousContent', label: 'Dangerous Content' },
-            ].map(c => (
-              <label key={c.id} className="flex cursor-pointer items-center gap-2 text-[13px] leading-[1.5] text-ink">
-                <input
-                  type="checkbox"
-                  checked={!!form.llm.geminiSafety?.[c.id as keyof typeof form.llm.geminiSafety]}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    setForm(f => ({
-                      ...f,
-                      llm: {
-                        ...f.llm,
-                        geminiSafety: {
-                          ...(f.llm.geminiSafety || { harassment: false, hateSpeech: false, sexuallyExplicit: false, dangerousContent: false }),
-                          [c.id]: e.target.checked
-                        }
-                      }
-                    }))
-                  }
-                  className="accent-[var(--accent)]"
-                />
-                <span>{c.label}</span>
-              </label>
-            ))}
-          </div>
-          <div className="field-hint mt-2">
-            Google-only: these HARM_CATEGORY thresholds are sent on the native <code>google</code> provider leg and to the Gemini TTS sidecar. Other providers ignore them. By default, Gemini heavily filters output (blocking anything it considers explicit, dangerous, etc). Uncheck these to allow the DJs to swear or discuss sensitive topics during banter.
-          </div>
-        </div>
-      </Card>
-      )}
 
       <Card title="Next-track picker" sub="how the DJ chooses">
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
