@@ -13,6 +13,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { TTS_ENGINES } from '../src/schemas/persona.js';
 import { splitCues } from '../src/audio/gemini.js';
 import { fallbackTextFor } from '../src/audio/tts-fallback.js';
@@ -67,4 +69,32 @@ test('OpenAI instructions carry voiceStyle on gpt-4o-tts only', () => {
     'elevenlabs', 'eleven_v3',
   );
   assert.ok(!('instructions' in eleven));
+});
+
+// The Interactions API has no rate param, so both entry points apply the pace
+// locally with ffmpeg. A rebuild once dropped that import and helper from the
+// engine, which made the station's speech-rate setting silently stop applying
+// to every Gemini render — a source-shape pin is the only cheap guard, since
+// the behaviour itself needs a live Google call to observe.
+test('both gemini entry points accept and apply a speech rate', async () => {
+  const src = readFileSync(
+    fileURLToPath(new URL('../src/audio/gemini.ts', import.meta.url)),
+    'utf8',
+  );
+  assert.match(src, /async function applyRate\(/, 'the local rate helper is gone');
+  assert.match(
+    src,
+    /import \{ hasFfmpeg, transcodeAudio \} from '\.\/audio-import\.js'/,
+    'the ffmpeg import went with it',
+  );
+  // speak() and speakMulti() must both route their result through it, or one
+  // of the two paths speaks at 1x while the other honours the station pace.
+  const applyRateCalls = src.match(/await applyRate\(/g) || [];
+  assert.equal(applyRateCalls.length, 2, 'speak() and speakMulti() each apply the rate');
+  // The caller must actually pass a scale, not just accept one.
+  const tts = readFileSync(
+    fileURLToPath(new URL('../src/audio/tts.ts', import.meta.url)),
+    'utf8',
+  );
+  assert.match(tts, /speakMulti\(geminiLines, \{ outPath, speedScale: scale \}\)/);
 });

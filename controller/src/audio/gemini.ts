@@ -15,6 +15,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import crypto from 'node:crypto';
 import { config } from '../config.js';
+import { hasFfmpeg, transcodeAudio } from './audio-import.js';
 
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 const MODELS = ['gemini-3.8-flash-lite-tts', 'gemini-3.8-flash-tts'];
@@ -137,9 +138,29 @@ async function outFile(customPath?: string): Promise<string> {
   return outPath;
 }
 
+/** Apply the composed speech rate locally with ffmpeg, mirroring remoteTts:
+ *  the Interactions API has no rate param. Invalid rates degrade to unity;
+ *  without ffmpeg the original audio is kept — never a failed render. */
+async function applyRate(audio: Buffer, outPath: string, speedScale: unknown): Promise<void> {
+  const rate = Number.isFinite(speedScale) && (speedScale as number) > 0 ? (speedScale as number) : 1;
+  if (rate === 1) {
+    await writeFile(outPath, audio);
+    return;
+  }
+  try {
+    if (!await hasFfmpeg()) throw new Error('ffmpeg is not available');
+    await transcodeAudio(audio, { outPath, format: 'wav', atempo: rate });
+  } catch (err) {
+    console.warn(
+      `[gemini] could not apply speech rate ${rate}; using original 1x audio: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    await writeFile(outPath, audio);
+  }
+}
+
 export async function speak(
   text: string,
-  { voice, style, outPath: customPath, signal }: { voice?: string; style?: string; outPath?: string; signal?: AbortSignal } = {},
+  { voice, style, outPath: customPath, signal, speedScale }: { voice?: string; style?: string; outPath?: string; signal?: AbortSignal; speedScale?: number } = {},
 ): Promise<string> {
   if (!text || !text.trim()) throw new Error('Empty TTS text');
   const { text: clean, styles } = splitCues(text);
@@ -161,7 +182,7 @@ export async function speak(
   };
   const audio = await postInteraction(body, signal);
   const outPath = await outFile(customPath);
-  await writeFile(outPath, audio);
+  await applyRate(audio, outPath, speedScale);
   return outPath;
 }
 
@@ -176,7 +197,7 @@ export interface MultiLine {
  *  per-line renders, same as the remote fast-path rule. */
 export async function speakMulti(
   lines: MultiLine[],
-  { outPath: customPath, signal }: { outPath?: string; signal?: AbortSignal } = {},
+  { outPath: customPath, signal, speedScale }: { outPath?: string; signal?: AbortSignal; speedScale?: number } = {},
 ): Promise<string> {
   if (!lines || lines.length === 0) throw new Error('Empty TTS lines');
   const seen = new Map<string, string>();
@@ -211,7 +232,9 @@ export async function speakMulti(
   };
   const audio = await postInteraction(body, signal);
   const outPath = await outFile(customPath);
-  await writeFile(outPath, audio);
+  // Rate is applied here too: an exchange that skipped it would speak at 1x
+  // while every single render on the same station honours the pace setting.
+  await applyRate(audio, outPath, speedScale);
   return outPath;
 }
 
@@ -221,8 +244,11 @@ export async function listVoices(): Promise<string[]> {
   try {
     const key = apiKey();
     if (!key) return [];
-    const res = await fetch(`${API_BASE}/voices?pageSize=100&type=prebuilt`, {
+    // Bounded: this list feeds the admin picker, which polls it, so an
+    // unbounded request would hang that poll rather than a spoken segment.
+    const res = await fetchWithTimeout(`${API_BASE}/voices?pageSize=100&type=prebuilt`, {
       headers: { 'x-goog-api-key': key },
+      timeoutMs: 10_000,
     });
     if (!res.ok) return [];
     const json = (await res.json()) as any;

@@ -502,7 +502,10 @@ async function speakGeminiExchange(
 
   const started = Date.now();
   try {
-    const result = await gemini.speakMulti(geminiLines, { outPath });
+    // Same pace resolution the single-line path uses, so an exchange does not
+    // quietly speak at 1x on a station whose DJ runs faster.
+    const scale = speechPaceScale(kind, resolved[0]?.line?.persona);
+    const result = await gemini.speakMulti(geminiLines, { outPath, speedScale: scale });
     if (typeof result === 'string') await applyEdgeFades(result);
 
     const combinedText = resolved.map(({ line: l }) => `${l.persona?.name || 'DJ'}: ${l.text}`).join('\n').slice(0, 240);
