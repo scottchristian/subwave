@@ -1161,10 +1161,11 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         </div>
       </Card>
 
+      {(form.llm.provider === 'google' || form.llm.fallback?.provider === 'google') && (
       <Card title="Gemini Safety Filters" sub="content blocking">
         <div className="field">
           <Label>Block categories</Label>
-          <div className="flex flex-col gap-2 mt-2">
+          <div className="mt-2 flex flex-col gap-2">
             {[
               { id: 'harassment', label: 'Harassment' },
               { id: 'hateSpeech', label: 'Hate Speech' },
@@ -1194,10 +1195,11 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             ))}
           </div>
           <div className="field-hint mt-2">
-            By default, Gemini heavily filters output (blocking anything it considers explicit, dangerous, etc). Uncheck these to allow the DJs to swear or discuss sensitive topics during banter.
+            Google-only: these HARM_CATEGORY thresholds are sent on the native <code>google</code> provider leg and to the Gemini TTS sidecar. Other providers ignore them. By default, Gemini heavily filters output (blocking anything it considers explicit, dangerous, etc). Uncheck these to allow the DJs to swear or discuss sensitive topics during banter.
           </div>
         </div>
       </Card>
+      )}
 
       <Card title="Next-track picker" sub="how the DJ chooses">
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
