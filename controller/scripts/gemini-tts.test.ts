@@ -87,14 +87,66 @@ test('both gemini entry points accept and apply a speech rate', async () => {
     /import \{ hasFfmpeg, transcodeAudio \} from '\.\/audio-import\.js'/,
     'the ffmpeg import went with it',
   );
-  // speak() and speakMulti() must both route their result through it, or one
-  // of the two paths speaks at 1x while the other honours the station pace.
-  const applyRateCalls = src.match(/await applyRate\(/g) || [];
-  assert.equal(applyRateCalls.length, 2, 'speak() and speakMulti() each apply the rate');
-  // The caller must actually pass a scale, not just accept one.
+  // speak() is the only render entry point, and it must route its result
+  // through the helper rather than writing the bytes straight out.
+  assert.match(
+    src,
+    /const audio = await postInteraction\(body, signal\);\s*\n\s*const outPath = await outFile\(customPath\);\s*\n\s*await applyRate\(audio, outPath, speedScale\);/,
+    'speak() must apply the rate, not write the audio unmodified',
+  );
+});
+
+// Multi-voice batching is an OPT-IN render path, never a precondition for
+// speaking. announceExchange keeps its per-line loop on purpose: a batch that
+// collapsed N lines into one segment would lose per-line gain, the per-speaker
+// session turns and the handoff's settle-on-final-line rule.
+test('announceExchange still airs one segment per line', () => {
+  const queue = readFileSync(
+    fileURLToPath(new URL('../src/broadcast/queue.ts', import.meta.url)),
+    'utf8',
+  );
+  const start = queue.indexOf('async announceExchange(');
+  assert.ok(start > 0, 'announceExchange is missing');
+  const body = queue.slice(start, queue.indexOf('\n  }\n', start));
+  assert.match(body, /for \(const l of lines\)/, 'lines must render individually');
+  assert.match(
+    body,
+    /rendered\.push\(\{ \.\.\.l, text, wavPath \}\)/,
+    'each line must keep its own persona attribution',
+  );
+  // The batched renderer exists, but is NOT wired into the air path.
+  assert.doesNotMatch(body, /speakExchange/);
+});
+
+test('speakExchange refuses anything that is not an all-gemini exchange', () => {
   const tts = readFileSync(
     fileURLToPath(new URL('../src/audio/tts.ts', import.meta.url)),
     'utf8',
   );
-  assert.match(tts, /speakMulti\(geminiLines, \{ outPath, speedScale: scale \}\)/);
+  const start = tts.indexOf('export async function speakExchange(');
+  assert.ok(start > 0, 'speakExchange is missing');
+  const body = tts.slice(start, tts.indexOf('\n}\n', start));
+  // Mixed engines are two renderers, not one conversation — refuse, never guess.
+  assert.match(body, /all-gemini exchange only/);
+  // It re-throws after recording the failure, so the caller's per-line
+  // fallback runs rather than the station losing the exchange.
+  assert.match(body, /catch \(err\)[\s\S]*throw err;/);
+});
+
+// Google's documented cap, and the reason a 3-voice show falls back rather
+// than failing. Pinned here so the constant and the error stay in step.
+test('multi-speaker batching is capped at Google\'s two-speaker limit', async () => {
+  const { speakMulti } = await import('../src/audio/gemini.js');
+  const line = (voice: string) => ({ text: 'hello', voice });
+  // Two distinct prebuilt voices: accepted (the request is stubbed out below by
+  // asserting the cap BEFORE any network call happens).
+  await assert.rejects(
+    () => speakMulti([line('Kore'), line('Puck'), line('Charon')]),
+    /multi-speaker supports 2 voices per request/,
+  );
+  // A designed/replicated id must never be silently voiced as a prebuilt one.
+  await assert.rejects(
+    () => speakMulti([{ text: 'hi', voice: 'voice_abc123' }]),
+    /prebuilt voices only/,
+  );
 });

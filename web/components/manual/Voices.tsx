@@ -53,8 +53,9 @@ export default function Voices() {
           <li>
             <strong>Gemini</strong> calls Google&apos;s TTS API directly — no sidecar —
             with a key from <code className="bs-code-inline">state/secrets.env</code>.
-            It honours the persona&apos;s voice style, speaks multi-voice exchanges in
-            one call, and falls back through the cheap model first.
+            It honours the persona&apos;s voice style, and can render a two-voice
+            exchange as one conversational request so the turn-taking between
+            speakers is the model&apos;s rather than a gap between separate clips.
           </li>
           <li>
             <strong>Remote</strong> is a TTS server you run yourself (a LAN box, a

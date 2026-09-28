@@ -22,7 +22,6 @@ import { resolvePersonaVoiceSlot } from './persona-engine.js';
 import { stripThinking } from '../llm/sdk.js';
 import * as settings from '../settings.js';
 import { recordTts } from '../stats.js';
-import { logEvent } from '../observability/events.js';
 import { energyForDaypart } from '../context.js';
 
 export const ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts', 'cloud', 'remote', 'gemini'];
@@ -368,6 +367,69 @@ export async function synthesizeSample(
 
 // Public entry point. Tries the configured engine; on failure falls back so the
 // DJ never goes silent. Every call is timed into the TTS ring buffer (stats.js).
+// A whole exchange in ONE Gemini request. Two things make this safe to expose
+// separately from announceExchange's own loop:
+//
+//   • Rendering is the only thing batched. The caller still decides how to air
+//     it, so per-line session turns, per-speaker attribution, per-line gain and
+//     the handoff's "settle on the final line" rule all stay intact — a batch
+//     that collapsed N lines into one segment would lose every one of those.
+//   • It is strictly optional. Anything mixed, a 3rd distinct voice, a custom
+//     `voice_…` id, or any failure at all throws, and the caller renders
+//     per-line. Multi-speaker is an improvement in cadence, never a
+//     precondition for speaking.
+export async function speakExchange(
+  lines: { persona?: any; text: string }[],
+  { kind = 'banter', outPath, signal, speedScale }: {
+    kind?: string; outPath?: string; signal?: AbortSignal; speedScale?: number;
+  } = {},
+): Promise<string> {
+  if (!lines || lines.length === 0) throw new Error('Empty TTS exchange');
+  const resolved = lines.map((l) => {
+    const personaTts = djPersonaTts(kind, l.persona);
+    const slot = resolveEngine(kind, personaTts);
+    return { line: l, engine: slot.engine, personaTts: slot.personaTts ?? personaTts };
+  });
+  // All-gemini only: a mixed engine is two renderers, not one conversation.
+  if (!resolved.every((r) => r.engine === 'gemini')) {
+    throw new Error('speakExchange batches an all-gemini exchange only');
+  }
+  const out = resolved.map(({ line: l, personaTts }) => ({
+    text: scrubCjkForSpeech(
+      normalizeForSpeech(stripThinking(l.text || ''), settings.get().tts?.corrections),
+      String(personaFor(l.persona)?.language || '').trim(),
+    ),
+    // Only a persona that actually PINS gemini owns its voice; otherwise the
+    // line takes gemini's default, same rule as the single-line path.
+    voice: personaTts?.engine === 'gemini' && personaTts.voice ? personaTts.voice : undefined,
+    style: typeof l.persona?.voiceStyle === 'string' ? l.persona.voiceStyle : undefined,
+    speaker: String(l.persona?.name || '').trim() || undefined,
+  }));
+
+  const started = Date.now();
+  try {
+    const result = await gemini.speakMulti(out, { outPath, signal, speedScale });
+    if (typeof result === 'string') await applyEdgeFades(result);
+    const combined = out.map((l) => l.text).join(' ').slice(0, 240);
+    recordTts({
+      kind, requested: 'gemini', chars: combined.length,
+      text: combined, persona: 'Multi-Speaker',
+      engine: 'gemini', fellBack: false,
+      ok: true, ms: Date.now() - started, t: new Date().toISOString(),
+    });
+    return result;
+  } catch (err) {
+    recordTts({
+      kind, requested: 'gemini', chars: 0,
+      text: 'Multi-speaker exchange failed', persona: 'Multi-Speaker',
+      engine: 'gemini', fellBack: false,
+      ok: false, ms: Date.now() - started, error: (err as any).message,
+      t: new Date().toISOString(),
+    });
+    throw err;
+  }
+}
+
 export async function speak(
   text: string,
   { kind = 'default', outPath, speedScale, persona }: { kind?: string; outPath?: string; speedScale?: number; persona?: any } = {},
@@ -480,77 +542,6 @@ export async function speak(
   }
 }
 
-// All-gemini exchange: one conversational call. gemini.speakMulti throws past
-// its voice cap and the caller falls back per-line, same as the remote rule.
-async function speakGeminiExchange(
-  resolved: { line: { persona: any; text: string }; slot: any; primaryPersonaTts: any }[],
-  { kind, outPath }: { kind: string; outPath?: string },
-): Promise<string> {
-  const geminiLines = resolved.map(({ line: l, primaryPersonaTts }) => {
-    const speakText = scrubCjkForSpeech(
-      normalizeForSpeech(stripThinking(l.text), settings.get().tts?.corrections),
-      String(personaFor(l.persona)?.language || '').trim(),
-    );
-    const voice = (primaryPersonaTts && primaryPersonaTts.engine === 'gemini' && primaryPersonaTts.voice)
-      ? primaryPersonaTts.voice
-      : undefined;
-    const style = typeof (l.persona as any)?.voiceStyle === 'string'
-      ? (l.persona as any).voiceStyle
-      : undefined;
-    return { text: speakText, voice, style };
-  });
-
-  const started = Date.now();
-  try {
-    // Same pace resolution the single-line path uses, so an exchange does not
-    // quietly speak at 1x on a station whose DJ runs faster.
-    const scale = speechPaceScale(kind, resolved[0]?.line?.persona);
-    const result = await gemini.speakMulti(geminiLines, { outPath, speedScale: scale });
-    if (typeof result === 'string') await applyEdgeFades(result);
-
-    const combinedText = resolved.map(({ line: l }) => `${l.persona?.name || 'DJ'}: ${l.text}`).join('\n').slice(0, 240);
-    recordTts({
-      kind, requested: 'gemini', chars: combinedText.length,
-      text: combinedText, persona: 'Multi-Speaker',
-      engine: 'gemini', fellBack: false,
-      ok: true, ms: Date.now() - started, t: new Date().toISOString(),
-    });
-    const totalChars = resolved.reduce((acc, { line: l }) => acc + (l.text || '').length, 0);
-    logEvent('tts', { chars: totalChars, engine: 'gemini' });
-
-    return result;
-  } catch (err) {
-    recordTts({
-      kind, requested: 'gemini', chars: 0,
-      text: 'Multi-speaker exchange failed', persona: 'Multi-Speaker',
-      engine: 'gemini', fellBack: false,
-      ok: false, ms: Date.now() - started, error: (err as any).message,
-      t: new Date().toISOString(),
-    });
-    throw err;
-  }
-}
-
-// Attempt to speak an entire multi-voice exchange at once if all speakers
-// resolve to the same batchable engine (`remote` = sidecar multi, `gemini` =
-// one conversational call, max 2 distinct voices). Anything mixed, or a gemini
-// batch that refuses, throws and the caller falls back to sequential
-// per-line rendering.
-export async function speakExchange(
-  lines: { persona: any; text: string }[],
-  { kind = 'banter', outPath }: { kind?: string; outPath?: string } = {},
-): Promise<string> {
-  const resolved = lines.map((l) => {
-    const personaTts = djPersonaTts(kind, l.persona);
-    const slot = resolveEngine(kind, personaTts);
-    return { line: l, slot, primaryPersonaTts: slot.personaTts ?? personaTts };
-  });
-  const engines = new Set(resolved.map((r) => r.slot.engine));
-  if (resolved.length > 0 && engines.size === 1 && resolved[0].slot.engine === 'gemini') {
-    return speakGeminiExchange(resolved, { kind, outPath });
-  }
-  throw new Error('speakExchange only supports an all-gemini exchange');
-}
 // Re-exported: every engine writes WAVs into piper's output dir, so cleanup is
 // engine-agnostic and callers need not know which engine wrote the file.
 export { cleanupOldVoices } from './piper.js';

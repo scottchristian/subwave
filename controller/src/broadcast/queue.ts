@@ -27,7 +27,7 @@ import * as showBoundary from './show-boundary.js';
 import * as blocklist from '../music/blocklist.js';
 import { artistRootKey, trackKey, type CandidateLike } from '../music/recency.js';
 import { albumKeyFor } from '../music/album-facts.js';
-import { speak, speakExchange, voiceGainDb } from '../audio/tts.js';
+import { speak, voiceGainDb } from '../audio/tts.js';
 import {
   writeSilentWav,
   discardSilentWav,
@@ -2257,19 +2257,16 @@ class Queue {
     }
     const rendered: { persona: Persona; text: string; wavPath: string }[] = [];
     try {
-      // Single conversational render when every line is gemini-voiced;
-      // anything else (or a >2-voice exchange) throws and renders per-line.
-      try {
-        const wavPath = await speakExchange(lines, { kind });
-        const combinedText = lines.map(l => `${l.persona?.name || 'DJ'}: ${l.text}`).join('\n');
-        rendered.push({ persona: lines[0].persona, text: combinedText, wavPath });
-      } catch {
-        for (const l of lines) {
-          const text = normalizeForDisplay(l.text || '');
-          if (!text) continue;
-          const wavPath = await this._speak(text, { kind, persona: l.persona });
-          rendered.push({ ...l, text, wavPath });
-        }
+      // One render per line, so every line keeps its OWN gain, its own session
+      // turn, its own speaker attribution and its own live-edge stamp. A single
+      // batched render would collapse N lines into one segment, which loses the
+      // per-speaker attribution this path exists to preserve and would settle a
+      // `handoff` exchange on a boundary it is supposed to hold for.
+      for (const l of lines) {
+        const text = normalizeForDisplay(l.text || '');
+        if (!text) continue;
+        const wavPath = await this._speak(text, { kind, persona: l.persona });
+        rendered.push({ ...l, text, wavPath });
       }
     } catch (err) {
       this.log('error', `Exchange render failed: ${(err as Error).message}`);

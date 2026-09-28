@@ -21,8 +21,13 @@ const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 const MODELS = ['gemini-3.8-flash-lite-tts', 'gemini-3.8-flash-tts'];
 const VOICE_STYLE_MAX = 300;
 
-// Multi-speaker single-request cap for prebuilt voices (Google docs).
+// Google's documented cap for speakers in ONE multi-speaker request.
 const MULTI_VOICE_CAP = 2;
+
+// The prebuilt voice used when a persona names none. `Puck` is the first
+// entry in Google's prebuilt table (Bright/Upbeat pair aside, it is the
+// canonical neutral default in their own single-speaker examples).
+const DEFAULT_VOICE = 'Puck';
 
 export function apiKey(): string {
   return process.env.GOOGLE_GENERATIVE_AI_API_KEY || '';
@@ -41,6 +46,8 @@ const VOCAL_BURSTS: Record<string, string> = {
   scream: 'scream', whisper: 'whispering', whispering: 'whispering',
   'short pause': 'short pause', 'long pause': 'long pause',
   uhm: 'breath',
+  // A cue body keeps its trailing punctuation, so `[sigh.]` is its own key.
+  'sigh.': 'sigh',
 };
 
 const DELIVERY_STYLES: Record<string, string> = {
@@ -177,7 +184,7 @@ export async function speak(
     generation_config: {
       // No safety key: the Interactions API 400s unknown generation_config
       // params, and defaults govern. A blocked render fails over normally.
-      speech_config: [{ voice: (voice || '').trim() || 'Puck' }],
+      speech_config: [{ voice: (voice || '').trim() || DEFAULT_VOICE }],
     },
   };
   const audio = await postInteraction(body, signal);
@@ -190,39 +197,61 @@ export interface MultiLine {
   text: string;
   voice?: string;
   style?: string;
+  // The label this turn is attributed to in `speech_metadata.speaker` and in
+  // `speech_config.speakers`. Kept SEPARATE from `voice`: the voice id is a
+  // model artefact ("Kore"), while the speaker is who is talking ("Sam"), and
+  // the same voice can legitimately back two personas. Defaults to the voice.
+  speaker?: string;
 }
 
-/** One conversational call for the whole exchange. Throws when more than
- *  MULTI_VOICE_CAP distinct voices are present — the caller falls back to
- *  per-line renders, same as the remote fast-path rule. */
+/** Multi-speaker TTS: one conversational request for a whole exchange.
+ *
+ *  `speech_config.speakers` carries the roster and each turn is a separate text
+ *  item naming its `speaker` in `speech_metadata`, with `mode: "conversational"`
+ *  for natural turn-taking. One request instead of N also means the model hears
+ *  the dialogue, so the cadence between speakers is the model's, not the
+ *  gap between N independent renders.
+ *
+ *  Throws past MULTI_VOICE_CAP distinct voices — Google's documented cap for a
+ *  single request — and on a custom `voice_…`/replicated id mixed in, which the
+ *  docs say must be synthesized per turn. The caller falls back to per-line
+ *  renders; that is a supported path, not an error state. */
 export async function speakMulti(
   lines: MultiLine[],
   { outPath: customPath, signal, speedScale }: { outPath?: string; signal?: AbortSignal; speedScale?: number } = {},
 ): Promise<string> {
   if (!lines || lines.length === 0) throw new Error('Empty TTS lines');
-  const seen = new Map<string, string>();
+  const seen = new Map<string, { speaker: string; voice: string }>();
   const turns: unknown[] = [];
   for (const line of lines) {
     const { text: clean, styles } = splitCues(line.text);
-    const voice = (line.voice || '').trim() || 'Puck';
-    const alias = voice.toLowerCase();
+    const voice = (line.voice || '').trim() || DEFAULT_VOICE;
+    // A designed (`voice_…`) or replicated id cannot share a multi-speaker
+    // request — Google documents those as per-turn synthesis — so refuse the
+    // whole batch rather than silently voice it with the wrong identity.
+    if (voice.startsWith('voice_') || voice.startsWith('voicekey_')) {
+      throw new Error('multi-speaker batching supports prebuilt voices only');
+    }
+    const speaker = (line.speaker || '').trim() || voice;
+    const alias = speaker.toLowerCase();
     if (!seen.has(alias)) {
       if (seen.size >= MULTI_VOICE_CAP) {
-        throw new Error(`speakMulti supports ${MULTI_VOICE_CAP} voices per call`);
+        throw new Error(`multi-speaker supports ${MULTI_VOICE_CAP} voices per request`);
       }
-      seen.set(alias, voice);
+      seen.set(alias, { speaker, voice });
     }
     turns.push({
       type: 'text',
       text: clean,
+      // `speaker` is required on EVERY turn in a multi-speaker request.
       annotations: [{
         type: 'speech_metadata',
-        speaker: seen.get(alias),
+        speaker,
         style: styleFor(line.style, styles),
       }],
     });
   }
-  const speakers = [...seen.entries()].map(([_alias, voice]) => ({ speaker: voice, voice }));
+  const speakers = [...seen.values()].map(s => ({ speaker: s.speaker, voice: s.voice }));
   const body = {
     input: [{ type: 'user_input', content: turns }],
     response_format: { type: 'audio' },
@@ -232,8 +261,7 @@ export async function speakMulti(
   };
   const audio = await postInteraction(body, signal);
   const outPath = await outFile(customPath);
-  // Rate is applied here too: an exchange that skipped it would speak at 1x
-  // while every single render on the same station honours the pace setting.
+  // Unary audio is WAV (RIFF) — bytes go straight to disk, same as speak().
   await applyRate(audio, outPath, speedScale);
   return outPath;
 }
