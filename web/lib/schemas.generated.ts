@@ -765,6 +765,7 @@ export const TTS_ENGINES = [
   'pocket-tts',
   'cloud',
   'remote',
+  'gemini',
 ] as const;
 
 /**
@@ -927,10 +928,10 @@ export function ttsVoiceSlotSchema(where: string, opts?: { allowInherit?: boolea
       } else if (voice.length < 1 || voice.length > TTS_VOICE_MAX) {
         return fail(`${where}.voice must be 1-${TTS_VOICE_MAX} chars`);
       }
-    } else if (engine === 'remote' || engine === PERSONA_TTS_INHERIT) {
-      // remote: sidecar-interpreted ids. inherit: no engine is known yet, so no
-      // per-engine rule can apply (resolvePersonaVoiceSlot decides at speak
-      // time). Both leave only the length cap, and empty is valid.
+    } else if (engine === 'remote' || engine === 'gemini' || engine === PERSONA_TTS_INHERIT) {
+      // remote/gemini: sidecar- or Google-interpreted ids. inherit: no engine
+      // is known yet, so no per-engine rule can apply (resolvePersonaVoiceSlot
+      // decides at speak time). All leave only the length cap, and empty is valid.
       if (voice.length > TTS_VOICE_MAX) {
         return fail(`${where}.voice must be 0-${TTS_VOICE_MAX} chars`);
       }

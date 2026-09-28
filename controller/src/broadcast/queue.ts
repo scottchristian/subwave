@@ -27,7 +27,7 @@ import * as showBoundary from './show-boundary.js';
 import * as blocklist from '../music/blocklist.js';
 import { artistRootKey, trackKey, type CandidateLike } from '../music/recency.js';
 import { albumKeyFor } from '../music/album-facts.js';
-import { speak, voiceGainDb } from '../audio/tts.js';
+import { speak, speakExchange, voiceGainDb } from '../audio/tts.js';
 import {
   writeSilentWav,
   discardSilentWav,
@@ -2257,11 +2257,19 @@ class Queue {
     }
     const rendered: { persona: Persona; text: string; wavPath: string }[] = [];
     try {
-      for (const l of lines) {
-        const text = normalizeForDisplay(l.text || '');
-        if (!text) continue;
-        const wavPath = await this._speak(text, { kind, persona: l.persona });
-        rendered.push({ ...l, text, wavPath });
+      // Single conversational render when every line is gemini-voiced;
+      // anything else (or a >2-voice exchange) throws and renders per-line.
+      try {
+        const wavPath = await speakExchange(lines, { kind });
+        const combinedText = lines.map(l => `${l.persona?.name || 'DJ'}: ${l.text}`).join('\n');
+        rendered.push({ persona: lines[0].persona, text: combinedText, wavPath });
+      } catch {
+        for (const l of lines) {
+          const text = normalizeForDisplay(l.text || '');
+          if (!text) continue;
+          const wavPath = await this._speak(text, { kind, persona: l.persona });
+          rendered.push({ ...l, text, wavPath });
+        }
       }
     } catch (err) {
       this.log('error', `Exchange render failed: ${(err as Error).message}`);

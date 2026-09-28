@@ -7,7 +7,7 @@ export default function Voices() {
     <ManualPage
       eyebrow="MANUAL · 12"
       title="Voices & TTS."
-      intro="The DJ's words are written by the language model, but turning them into speech is a separate job. Six text-to-speech engines render the voice: four built in, one hosted, and one a TTS server you run yourself. You can mix them per segment, clone a voice, point at your own server, or hand the heavy one to a GPU."
+      intro="The DJ's words are written by the language model, but turning them into speech is a separate job. Seven text-to-speech engines render the voice: four built in, two hosted, and one a TTS server you run yourself. You can mix them per segment, clone a voice, point at your own server, or hand the heavy one to a GPU."
       current="/manual/voices"
     >
       <section className="bs-section">
@@ -15,7 +15,7 @@ export default function Voices() {
         <h2>Local voices, or the cloud.</h2>
         <p>
           You pick the engine under <strong>Admin &rarr; TTS voice</strong>. Four are
-          built in, one is hosted, and one points at a server you run yourself.
+          built in, two are hosted, and one points at a server you run yourself.
         </p>
         <ul className="bs-list">
           <li>
@@ -44,11 +44,17 @@ export default function Voices() {
             <code className="bs-code-inline">tts-heavy</code> sidecar.
           </li>
           <li>
-            <strong>Cloud</strong> is hosted text-to-speech through OpenAI or ElevenLabs,
-            using an API key. It's the most lifelike of the six, but it costs per use and
+            <strong>Cloud</strong> is hosted text-to-speech through OpenAI, ElevenLabs
+            or Fish Audio, using an API key. It's the most lifelike of the set, but it costs per use and
             depends on the network being up. The Cloud engine also speaks{' '}
             <strong>OpenAI-compatible</strong>, so it can point at any self-hosted speech
             server, including a Chatterbox box on your own GPU (see below).
+          </li>
+          <li>
+            <strong>Gemini</strong> calls Google&apos;s TTS API directly — no sidecar —
+            with a key from <code className="bs-code-inline">state/secrets.env</code>.
+            It honours the persona&apos;s voice style, speaks multi-voice exchanges in
+            one call, and falls back through the cheap model first.
           </li>
           <li>
             <strong>Remote</strong> is a TTS server you run yourself (a LAN box, a

@@ -9,6 +9,7 @@ import * as chatterbox from './chatterbox.js';
 import * as pocketTts from './pocketTts.js';
 import { heavyColdEngines, heavyEnabledEngines } from './ttsHeavyClient.js';
 import * as remoteTts from './remoteTts.js';
+import * as gemini from './gemini.js';
 import { normalizeForSpeech } from './speech-text.js';
 import { scrubCjkForSpeech } from './spoken-script-policy.js';
 import {
@@ -21,9 +22,10 @@ import { resolvePersonaVoiceSlot } from './persona-engine.js';
 import { stripThinking } from '../llm/sdk.js';
 import * as settings from '../settings.js';
 import { recordTts } from '../stats.js';
+import { logEvent } from '../observability/events.js';
 import { energyForDaypart } from '../context.js';
 
-export const ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts', 'cloud', 'remote'];
+export const ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts', 'cloud', 'remote', 'gemini'];
 
 // Kinds NOT voiced by the on-air persona: they use the global defaultEngine.
 // Every other kind takes engine+voice from the effective persona's `tts`.
@@ -62,6 +64,7 @@ function engineUsable(engine: string, cloudProvider?: string | null): boolean {
   if (engine === 'pocket-tts') return pocketTts.isAvailable();
   if (engine === 'kokoro') return kokoro.isAvailable();
   if (engine === 'remote') return remoteTts.isAvailable();
+  if (engine === 'gemini') return gemini.isAvailable();
   return true;
 }
 
@@ -249,6 +252,15 @@ async function speakWith(engine: string, text: string, opts: any, personaTts: an
       : undefined;
     const style = typeof opts.voiceStyle === 'string' ? opts.voiceStyle : undefined;
     return remoteTts.speak(text, { ...opts, voice, style });
+  }
+  if (engine === 'gemini') {
+    // Direct Google TTS, no sidecar. Voice ids are prebuilt/custom/replicated
+    // names; empty falls to the engine default. Style threads identically.
+    const voice = (personaTts && personaTts.engine === 'gemini' && personaTts.voice)
+      ? personaTts.voice
+      : undefined;
+    const style = typeof opts.voiceStyle === 'string' ? opts.voiceStyle : undefined;
+    return gemini.speak(text, { ...opts, voice, style });
   }
   // piper `voice` is an .onnx filename; empty → the baked-in default voice.
   const voice = (personaTts && personaTts.engine === 'piper' && personaTts.voice)
@@ -468,6 +480,74 @@ export async function speak(
   }
 }
 
+// All-gemini exchange: one conversational call. gemini.speakMulti throws past
+// its voice cap and the caller falls back per-line, same as the remote rule.
+async function speakGeminiExchange(
+  resolved: { line: { persona: any; text: string }; slot: any; primaryPersonaTts: any }[],
+  { kind, outPath }: { kind: string; outPath?: string },
+): Promise<string> {
+  const geminiLines = resolved.map(({ line: l, primaryPersonaTts }) => {
+    const speakText = scrubCjkForSpeech(
+      normalizeForSpeech(stripThinking(l.text), settings.get().tts?.corrections),
+      String(personaFor(l.persona)?.language || '').trim(),
+    );
+    const voice = (primaryPersonaTts && primaryPersonaTts.engine === 'gemini' && primaryPersonaTts.voice)
+      ? primaryPersonaTts.voice
+      : undefined;
+    const style = typeof (l.persona as any)?.voiceStyle === 'string'
+      ? (l.persona as any).voiceStyle
+      : undefined;
+    return { text: speakText, voice, style };
+  });
+
+  const started = Date.now();
+  try {
+    const result = await gemini.speakMulti(geminiLines, { outPath });
+    if (typeof result === 'string') await applyEdgeFades(result);
+
+    const combinedText = resolved.map(({ line: l }) => `${l.persona?.name || 'DJ'}: ${l.text}`).join('\n').slice(0, 240);
+    recordTts({
+      kind, requested: 'gemini', chars: combinedText.length,
+      text: combinedText, persona: 'Multi-Speaker',
+      engine: 'gemini', fellBack: false,
+      ok: true, ms: Date.now() - started, t: new Date().toISOString(),
+    });
+    const totalChars = resolved.reduce((acc, { line: l }) => acc + (l.text || '').length, 0);
+    logEvent('tts', { chars: totalChars, engine: 'gemini' });
+
+    return result;
+  } catch (err) {
+    recordTts({
+      kind, requested: 'gemini', chars: 0,
+      text: 'Multi-speaker exchange failed', persona: 'Multi-Speaker',
+      engine: 'gemini', fellBack: false,
+      ok: false, ms: Date.now() - started, error: (err as any).message,
+      t: new Date().toISOString(),
+    });
+    throw err;
+  }
+}
+
+// Attempt to speak an entire multi-voice exchange at once if all speakers
+// resolve to the same batchable engine (`remote` = sidecar multi, `gemini` =
+// one conversational call, max 2 distinct voices). Anything mixed, or a gemini
+// batch that refuses, throws and the caller falls back to sequential
+// per-line rendering.
+export async function speakExchange(
+  lines: { persona: any; text: string }[],
+  { kind = 'banter', outPath }: { kind?: string; outPath?: string } = {},
+): Promise<string> {
+  const resolved = lines.map((l) => {
+    const personaTts = djPersonaTts(kind, l.persona);
+    const slot = resolveEngine(kind, personaTts);
+    return { line: l, slot, primaryPersonaTts: slot.personaTts ?? personaTts };
+  });
+  const engines = new Set(resolved.map((r) => r.slot.engine));
+  if (resolved.length > 0 && engines.size === 1 && resolved[0].slot.engine === 'gemini') {
+    return speakGeminiExchange(resolved, { kind, outPath });
+  }
+  throw new Error('speakExchange only supports an all-gemini exchange');
+}
 // Re-exported: every engine writes WAVs into piper's output dir, so cleanup is
 // engine-agnostic and callers need not know which engine wrote the file.
 export { cleanupOldVoices } from './piper.js';
@@ -489,6 +569,7 @@ export function availableEngines() {
     pocketTtsCloning: pocketTts.cloningAvailable(),
     cloud: cloud.isConfigured(),
     remote: remoteTts.isAvailable(),
+    gemini: gemini.isAvailable(),
     // Per-provider: a persona's cloud voice needs ITS provider configured,
     // which can differ from the global Cloud-engine provider.
     cloudByProvider: {
@@ -547,8 +628,8 @@ export function describeRouting() {
     voice = (personaTts?.engine === 'piper' && personaTts.voice)
       ? personaTts.voice
       : null;
-  } else if (engine === 'remote') {
-    voice = (personaTts?.engine === 'remote' && personaTts.voice)
+  } else if (engine === 'remote' || engine === 'gemini') {
+    voice = (personaTts?.engine === engine && personaTts.voice)
       ? personaTts.voice
       : null;
   }
