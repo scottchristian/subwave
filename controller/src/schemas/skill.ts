@@ -290,9 +290,13 @@ export const SKILL_VOICE_ENGINES = [
   'cloud',
   'remote',
 <<<<<<< HEAD
+<<<<<<< HEAD
   'gemini',
 =======
 >>>>>>> 9ddfb986 (feat(skills): per-skill TTS voice override)
+=======
+  // 'gemini',  // ← uncomment when landing the gemini-TTS PR (#1718); merge note above
+>>>>>>> c42bb240 (docs(skills): state the merge order against the gemini-TTS PR)
 ] as const;
 
 export const SKILL_VOICE_PROVIDERS = [
