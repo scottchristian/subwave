@@ -78,6 +78,13 @@ export function clampPersonaDial(v: unknown): number {
 // persona's `tts` and by the station rescue slot (`settings.tts.fallback`) — a
 // fallback slot is handed to speakWith() as a synthetic persona.
 
+// Adding an engine here? Check whether a second, RESTATED copy of this list
+// exists elsewhere — `SKILL_VOICE_ENGINES` in `schemas/skill.ts` is one, and
+// it is pinned EQUAL to this list by `scripts/skill-voice.test.ts`. `gemini`
+// (added in this PR) is the current example: that test starts failing the
+// moment this entry lands, and the fix is to add 'gemini' to
+// SKILL_VOICE_ENGINES in the same merge. See the note on that list — the two
+// lists cannot both be right, and the test is the tiebreak.
 export const TTS_ENGINES = [
   'piper',
   'kokoro',
