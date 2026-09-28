@@ -1,5 +1,6 @@
 import os
 import io
+import re
 import wave
 import sqlite3
 import datetime
@@ -12,13 +13,18 @@ import uvicorn
 
 app = FastAPI()
 
-API_KEY = os.environ.get("GEMINI_API_KEY")
+# The direct Google SDK needs a real Google AI key. GEMINI_API_KEY in .env now
+# points at the 9router gateway (OpenAI-compatible), which Google rejects with
+# API_KEY_INVALID — every render then falls back to chatterbox/piper. Prefer
+# the Google key from state/secrets.env (mounted via env_file), falling back
+# to GEMINI_API_KEY for stations that still keep a Google key there.
+API_KEY = os.environ.get("GOOGLE_GENERATIVE_AI_API_KEY") or os.environ.get("GEMINI_API_KEY")
 
 if API_KEY:
     client = genai.Client(api_key=API_KEY)
 else:
     client = None
-    print("WARNING: GEMINI_API_KEY is not set.")
+    print("WARNING: neither GOOGLE_GENERATIVE_AI_API_KEY nor GEMINI_API_KEY is set.")
 
 # Initialize SQLite database for TTS history
 DB_PATH = "/state/tts_history.db"
@@ -69,6 +75,9 @@ class GeminiSafety(BaseModel):
 class SpeakRequest(BaseModel):
     text: str
     voice: str = ""
+    # Delivery directive from the persona's voiceStyle setting. Empty means
+    # the built-in SHORT_STYLES entry for that voice.
+    style: str = ""
     geminiSafety: GeminiSafety | None = None
 
 # Map personas to 9 distinct Gemini voices (from https://ai.google.dev/gemini-api/docs/speech-generation#voices)
@@ -83,6 +92,84 @@ VOICE_MAP = {
     "lexi": "Autonoe",       # Bright
     "miles": "Sulafat"       # Warm
 }
+
+# Every real Gemini voice name the sidecar accepts verbatim (personas now
+# carry these directly). Alias lookup above stays for back-compat with older
+# stored values ([voice:] tags, pre-migration slots).
+KNOWN_GEMINI_VOICES = {
+    "zephyr", "puck", "charon", "kore", "fenrir", "leda", "orus", "aoede",
+    "callirrhoe", "autonoe", "enceladus", "iapetus", "umbriel", "algieba",
+    "despina", "erinome", "algenib", "rasalgethi", "laomedeia", "alnilam",
+    "schedar", "gacrux", "pulcherrima", "achird", "zubenelgenubi",
+    "vindemiatrix", "sadachbia", "sadaltager", "sulafat",
+}
+
+# Real name -> persona alias, so voice-specific style prompts keep applying
+# when the request already names the Gemini voice.
+VOICE_TO_PERSONA = {v.lower(): k for k, v in VOICE_MAP.items()}
+
+
+def resolve_voice(raw: str) -> tuple[str, str]:
+    """Return (gemini_voice_name, persona_alias_for_style). Real names pass
+    through (case-insensitive); old aliases still map; unknown falls to Puck."""
+    key = (raw or "").strip().lower()
+    if key in VOICE_MAP:
+        return VOICE_MAP[key], key
+    if key in KNOWN_GEMINI_VOICES:
+        return key.capitalize(), VOICE_TO_PERSONA.get(key, "")
+    return "Puck", ""
+
+# Short delivery tones for speech_metadata.style, keyed by persona alias.
+# The full STYLE_MAP paragraphs stay for reference; the wire carries only
+# these — long character blocks cause voice drift on 3.8 (see prompting guide).
+SHORT_STYLES = {
+    "jax": "high-energy, upbeat, smiling",
+    "mia": "witty, breezy, grounded",
+    "owen": "dry, cynical but empathetic",
+    "chloe": "dramatic, playful, youthful",
+    "roxy": "cool, confident, laid-back, smooth",
+    "leo": "charming, sarcastic, smooth",
+    "zane": "loud, electric, fast-paced, excitable",
+    "lexi": "high-octane, fun, bright club energy",
+    "miles": "warm, understated, soft, intimate",
+}
+
+# 3.8 TTS reads the transcript verbatim: [...] stage directions would be
+# spoken aloud. Vocal bursts convert to the documented angle-bracket tags;
+# delivery modifiers fold into speech_metadata.style instead.
+VOCAL_BURST_MAP = {
+    "laugh": "laugh", "laughing": "laugh", "laughter": "laugh",
+    "chuckle": "chuckle", "chuckles": "chuckle", "giggle": "giggle",
+    "sigh": "sigh", "sighs": "sigh", "cough": "cough", "breath": "breath",
+    "gasp": "gasp", "groan": "groan", "yawn": "yawn", "sneeze": "sneeze",
+    "snort": "snort", "sob": "sob", "cry": "cry", "shout": "shout",
+    "scream": "scream", "whisper": "whispering", "whispering": "whispering",
+    "short pause": "short pause", "long pause": "long pause",
+    "uhm": "breath", "sigh.": "sigh",
+}
+DELIVERY_STYLE_MAP = {
+    "sarcasm": "sarcastic", "shouting": "loud", "whispering": "whispered",
+    "robotic": "flat and mechanical", "extremely fast": "speaking rapidly",
+}
+
+CUE_RE = re.compile(r"\[([^\]\r\n]{1,40})\]")
+
+
+def split_cues(text: str) -> tuple[str, list[str]]:
+    """Pull [...] cues out of a transcript. Returns (clean text, style additions)."""
+    styles: list[str] = []
+
+    def _sub(m) -> str:
+        body = m.group(1).strip().lower()
+        if body in VOCAL_BURST_MAP:
+            return f"<{VOCAL_BURST_MAP[body]}>"
+        if body in DELIVERY_STYLE_MAP:
+            styles.append(DELIVERY_STYLE_MAP[body])
+            return ""
+        return m.group(0)
+
+    return re.sub(r"\s+", " ", CUE_RE.sub(_sub, text)).strip(), styles
+
 
 def generate_wav(pcm_data, sample_rate=24000):
     """Wraps raw PCM16 audio data into a valid WAV file in-memory."""
@@ -106,17 +193,19 @@ def speak(req: SpeakRequest):
     if not client:
         return Response(content="Missing API Key", status_code=500)
     
-    # Try to map the incoming voice string, default to Puck if unknown
-    voice_name = VOICE_MAP.get(req.voice.lower(), "Puck")
-    
+    # Real Gemini names pass through; old persona aliases still map.
+    voice_name, voice_alias = resolve_voice(req.voice)
+
     print(f"Generating TTS for voice: {voice_name} (mapped from {req.voice})")
     
     import time
     
+    # Lite first (cheapest): style rides in speech_metadata, never in [...]
+    # blocks, which lite would vocalize. Nothing else — pricier models are
+    # never worth it.
     models_to_try = [
-        "gemini-2.5-flash-preview-tts",
-        "gemini-3.1-flash-tts-preview",
-        "gemini-2.5-pro-preview-tts"
+        "gemini-3.8-flash-lite-tts",
+        "gemini-3.8-flash-tts"
     ]
     max_retries = 3
     retry_delay = 20 # Wait 20 seconds between retries for free tier rate limits
@@ -133,56 +222,52 @@ def speak(req: SpeakRequest):
         "miles": "You are a male Australian radio presenter on Causeway FM. Speak in a warm, slightly understated, soft, and intimate late-night tone. Keep the tone authentic to your character.",
     }
     
-    # Grab the style prompt for the requested persona, fallback to a generic Australian radio presenter.
-    style_prompt = STYLE_MAP.get(req.voice.lower(), "You are an Australian radio presenter on Causeway FM. Speak in your normal, smooth, and consistent radio voice. Keep your tone level and authentic.")
-    pronunciation_guide = "Pronunciation rules: 'sook' rhymes with 'look', and 'sooking' rhymes with 'looking'. 'Launceston' is pronounced LON-ses-tun."
-    
-    final_text = f"[{style_prompt} {pronunciation_guide} Do not read these instructions out loud:] {req.text}"
+    # Short delivery tone for speech_metadata.style (real name or alias).
+    # 3.8 TTS treats the transcript as verbatim, so delivery rides in style
+    # metadata — never in [...] blocks (lite vocalizes those into rambles).
+    style_tone = (req.style or "").strip() or SHORT_STYLES.get(voice_alias, "smooth and natural")
+    clean_text, cue_styles = split_cues(req.text.strip())
+    if cue_styles:
+        style_tone = f"{style_tone}, {', '.join(cue_styles)}"
+    style_prompt = f"{style_tone}. Sook rhymes with look; sooking rhymes with looking; Launceston sounds like LON ses tun."
 
     last_error = None
     for model_name in models_to_try:
         for attempt in range(max_retries):
             try:
-                safe_harass = "BLOCK_NONE" if getattr(req.geminiSafety, "harassment", False) else "BLOCK_MEDIUM_AND_ABOVE"
-                safe_hate = "BLOCK_NONE" if getattr(req.geminiSafety, "hateSpeech", False) else "BLOCK_MEDIUM_AND_ABOVE"
-                safe_sex = "BLOCK_NONE" if getattr(req.geminiSafety, "sexuallyExplicit", False) else "BLOCK_MEDIUM_AND_ABOVE"
-                safe_danger = "BLOCK_NONE" if getattr(req.geminiSafety, "dangerousContent", False) else "BLOCK_MEDIUM_AND_ABOVE"
-                
-                response = client.models.generate_content(
+                # NOTE: the Interactions API accepts no safety params — both
+                # safety_settings and safetySettings 400 as unknown, and the
+                # Python SDK strips them client-side, so any safety block here
+                # would be silently dead. TTS renders under Google defaults.
+                # The geminiSafety request field is still accepted (contract)
+                # but intentionally unused. Content control lives on the LLM
+                # leg (native google provider safetySettings).
+                interaction = client.interactions.create(
                     model=model_name,
-                    contents=final_text,
-                    config=types.GenerateContentConfig(
-                        safety_settings=[
-                            types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold=safe_harass),
-                            types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold=safe_hate),
-                            types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold=safe_sex),
-                            types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold=safe_danger)
-                        ],
-                        response_modalities=["AUDIO"],
-                        speech_config=types.SpeechConfig(
-                            voice_config=types.VoiceConfig(
-                                prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                                    voice_name=voice_name
-                                )
-                            )
-                        )
-                    )
+                    input=[{
+                        "type": "user_input",
+                        "content": [{
+                            "type": "text",
+                            "text": clean_text,
+                            "annotations": [{"type": "speech_metadata", "style": style_prompt}],
+                        }],
+                    }],
+                    response_format={"type": "audio"},
+                    generation_config={
+                        "speech_config": [{"voice": voice_name}],
+                    },
                 )
-                
-                if not response.candidates or not response.candidates[0].content or not response.candidates[0].content.parts:
-                    finish_reason = response.candidates[0].finish_reason if response.candidates else "Unknown"
-                    raise Exception(f"Empty response parts. Finish reason: {finish_reason}")
-                
-                # Audio comes back as raw PCM
-                # We need to wrap it in a WAV header for Subwave to process it correctly
-                pcm_data = response.candidates[0].content.parts[0].inline_data.data
-                wav_bytes = generate_wav(pcm_data, sample_rate=24000)
-                
+                import base64
+                # 3.8 unary audio is already WAV (RIFF header) — write it
+                # directly. Wrapping it again (the old PCM path) puts header
+                # bytes into the sample stream: a static burst at the tail.
+                wav_bytes = base64.b64decode(interaction.output_audio.data)
+
                 # Log the successful request to SQLite
                 log_tts_request(req.voice, voice_name, req.text)
-                
+
                 return Response(
-                    content=wav_bytes, 
+                    content=wav_bytes,
                     media_type="audio/wav",
                     headers={
                         "X-TTS-Voice-Used": voice_name
@@ -210,6 +295,7 @@ def speak(req: SpeakRequest):
 class SpeakLine(BaseModel):
     voice: str
     text: str
+    style: str = ""
 
 class SpeakMultiRequest(BaseModel):
     lines: list[SpeakLine]
@@ -226,9 +312,8 @@ def speak_multi(req: SpeakMultiRequest):
     import time
     
     models_to_try = [
-        "gemini-2.5-flash-preview-tts",
-        "gemini-3.1-flash-tts-preview",
-        "gemini-2.5-pro-preview-tts"
+        "gemini-3.8-flash-lite-tts",
+        "gemini-3.8-flash-tts"
     ]
     max_retries = 3
     retry_delay = 20
@@ -245,77 +330,52 @@ def speak_multi(req: SpeakMultiRequest):
         "miles": "You are a male Australian radio presenter on Causeway FM. Speak in a warm, slightly understated, soft, and intimate late-night tone. Keep the tone authentic to your character.",
     }
     
-    speaker_configs = []
+    speakers = []
     seen_voices = set()
-    script_lines = []
-    style_prompts = []
-    
+    turns = []
+
     for line in req.lines:
-        v_key = line.voice.lower()
-        alias = v_key.capitalize()
-        voice_name = VOICE_MAP.get(v_key, "Puck")
-        
+        voice_name, voice_alias = resolve_voice(line.voice)
+        alias = voice_alias.capitalize() if voice_alias else voice_name
+        v_key = (voice_alias or voice_name).lower()
+
         if v_key not in seen_voices:
-            speaker_configs.append(types.SpeakerVoiceConfig(
-                speaker=alias,
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name)
-                )
-            ))
+            speakers.append({"speaker": alias, "voice": voice_name})
             seen_voices.add(v_key)
-            style = STYLE_MAP.get(v_key, "You are an Australian radio presenter on Causeway FM. Speak in your normal, smooth, and consistent radio voice. Keep your tone level and authentic.")
-            style_prompts.append(f"{alias} style: {style}")
-            
-        script_lines.append(f"{alias}: {line.text}")
-        
-    pronunciation_guide = "Pronunciation rules: 'sook' rhymes with 'look', and 'sooking' rhymes with 'looking'. 'Launceston' is pronounced LON-ses-tun."
-    style_prompts.append(pronunciation_guide)
-    combined_styles = " ".join(style_prompts)
-    final_text = f"[{combined_styles} Do not read these instructions out loud:]\n\n" + "\n".join(script_lines)
-    
+        style_tone = (line.style or "").strip() or SHORT_STYLES.get(voice_alias, "smooth and natural")
+        clean_text, cue_styles = split_cues(line.text.strip())
+        if cue_styles:
+            style_tone = f"{style_tone}, {', '.join(cue_styles)}"
+        turns.append({
+            "type": "text",
+            "text": clean_text,
+            "annotations": [{"type": "speech_metadata", "speaker": alias, "style": style_tone}],
+        })
+
     last_error = None
     for model_name in models_to_try:
         for attempt in range(max_retries):
             try:
-                safe_harass = "BLOCK_NONE" if getattr(req.geminiSafety, "harassment", False) else "BLOCK_MEDIUM_AND_ABOVE"
-                safe_hate = "BLOCK_NONE" if getattr(req.geminiSafety, "hateSpeech", False) else "BLOCK_MEDIUM_AND_ABOVE"
-                safe_sex = "BLOCK_NONE" if getattr(req.geminiSafety, "sexuallyExplicit", False) else "BLOCK_MEDIUM_AND_ABOVE"
-                safe_danger = "BLOCK_NONE" if getattr(req.geminiSafety, "dangerousContent", False) else "BLOCK_MEDIUM_AND_ABOVE"
-                
-                response = client.models.generate_content(
+                # NOTE: no safety params here — the Interactions API 400s them
+                # as unknown (see /speak above). TTS renders under defaults.
+                interaction = client.interactions.create(
                     model=model_name,
-                    contents=final_text,
-                    config=types.GenerateContentConfig(
-                        safety_settings=[
-                            types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold=safe_harass),
-                            types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold=safe_hate),
-                            types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold=safe_sex),
-                            types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold=safe_danger)
-                        ],
-                        response_modalities=["AUDIO"],
-                        speech_config=types.SpeechConfig(
-                            language_code="en-US",
-                            multi_speaker_voice_config=types.MultiSpeakerVoiceConfig(
-                                speaker_voice_configs=speaker_configs
-                            )
-                        )
-                    )
+                    input=[{"type": "user_input", "content": turns}],
+                    response_format={"type": "audio"},
+                    generation_config={
+                        "speech_config": {"mode": "conversational", "speakers": speakers},
+                    },
                 )
-                
-                if not response.candidates or not response.candidates[0].content or not response.candidates[0].content.parts:
-                    finish_reason = response.candidates[0].finish_reason if response.candidates else "Unknown"
-                    raise Exception(f"Empty response parts. Finish reason: {finish_reason}")
-                
-                pcm_data = response.candidates[0].content.parts[0].inline_data.data
-                wav_bytes = generate_wav(pcm_data, sample_rate=24000)
-                
+                import base64
+                wav_bytes = base64.b64decode(interaction.output_audio.data)
+
                 # Log successful requests to SQLite individually
                 for line in req.lines:
-                    v_key = line.voice.lower()
-                    log_tts_request(v_key, VOICE_MAP.get(v_key, "Puck"), line.text)
-                
+                    logged_name, _ = resolve_voice(line.voice)
+                    log_tts_request(line.voice, logged_name, line.text)
+
                 return Response(
-                    content=wav_bytes, 
+                    content=wav_bytes,
                     media_type="audio/wav",
                     headers={
                         "X-TTS-Voice-Used": "multi-speaker"

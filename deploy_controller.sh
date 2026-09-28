@@ -1,7 +1,9 @@
 #!/bin/bash
 set -e
 echo "Copying to server..."
-tar -czf update.tar.gz controller/src gemini_tts.py
+# COPYFILE_DISABLE=1 keeps macOS AppleDouble (._*) files out of the tarball —
+# a stray ._pick-criteria.md once crash-looped the controller on boot.
+COPYFILE_DISABLE=1 tar -czf update.tar.gz controller/src gemini_tts.py
 scp update.tar.gz root@192.168.68.196:/root/subwave/update.tar.gz
 
 echo "Patching containers..."

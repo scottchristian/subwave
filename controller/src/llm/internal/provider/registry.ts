@@ -344,8 +344,15 @@ export function reasoningMandatoryModel(id: string): boolean {
 }
 
 // Ollama server URL: settings field, else the config default.
-export function ollamaBaseUrl(cfg: any): string {
-  return cfg.ollamaUrl || config.ollama.url;
+/**
+ * Per-call safety thresholds for the native `google` provider. ai-sdk reads
+ * safetySettings ONLY from per-call providerOptions — not from the
+ * model-construction settings object, which never reaches the wire (proven:
+ * a construction-arg threshold produced no safetySettings in the request
+ * body). Checked = block that category; unchecked/absent = allow.
+ * Every other provider gets {} (no-op spread).
+ */
+export function ollamaBaseUrl(cfg: any): string {  return cfg.ollamaUrl || config.ollama.url;
 }
 
 // Chat default for the `locca` provider (llama.cpp on the host). settings
@@ -483,14 +490,7 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
         ...(cfg.baseUrl ? { baseURL: cfg.baseUrl, headers: { Authorization: `Bearer ${cfg.apiKey}` } } : {}) 
       });
       // @ts-ignore - provider types changed in newer ai-sdk versions
-      model = provider(id, {
-        safetySettings: [
-          { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: cfg.geminiSafety?.hateSpeech ? 'BLOCK_NONE' : 'BLOCK_MEDIUM_AND_ABOVE' },
-          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: cfg.geminiSafety?.dangerousContent ? 'BLOCK_NONE' : 'BLOCK_MEDIUM_AND_ABOVE' },
-          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: cfg.geminiSafety?.sexuallyExplicit ? 'BLOCK_NONE' : 'BLOCK_MEDIUM_AND_ABOVE' },
-          { category: 'HARM_CATEGORY_HARASSMENT', threshold: cfg.geminiSafety?.harassment ? 'BLOCK_NONE' : 'BLOCK_MEDIUM_AND_ABOVE' }
-        ]
-      });
+      model = provider(id);
       break;
     }
     case 'deepseek': {

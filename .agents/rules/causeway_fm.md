@@ -10,7 +10,7 @@ Must try and keep cost's to $0 where possible, only suggest to spend $ on tokens
 
 ## LLM Model Stack
 - **Primary Model:** `gemini/gemini-3.5-flash-lite` (via 9router at `http://192.168.68.193:20128/v1`, key = `.env GEMINI_API_KEY`). Set 2026-09-26 by operator instruction — do NOT switch back to `Free_Shit` without explicit operator approval (see incident 2026-09-26 below).
-- **Failover Model:** `gemini-2.5-flash` (via the `google` provider in Subwave, key = `GOOGLE_GENERATIVE_AI_API_KEY` in `state/secrets.env`).
+- **Failover Model:** `gemini-2.5-flash-lite` (via the `google` provider in Subwave, key = `GOOGLE_GENERATIVE_AI_API_KEY` in `state/secrets.env`). (`gemini-2.5-flash` retired 2026-09 — Google 400s it for this key.)
 - `Free_Shit` (9router alias, free Nvidia Nemotron) is PARKED, not primary. It still throws `Invalid JSON response` on structured calls (Station ID, picker) even with the fence-strip/prose-synthesis fixes in `registry.ts`.
 - **Important**: `Free_Shit` occasionally wraps tool-call arguments in markdown fences (` ```json ... ``` `). A custom fix in `controller/src/llm/internal/provider/registry.ts` strips these fences in the `openAICompatibleFetch` response handler. Additionally, `Free_Shit` is on the skip-list for OpenAI-specific no-think injection (`chat_template_kwargs`, `thinking`, `reasoning_format`) to avoid 400 Bad Requests from the upstream router. `gemini/*` models are NOT on that skip-list — but `gemini/gemini-3.8-flash` DOES 400 with `Thinking level MINIMAL is not supported`, so never set it primary. `gemini-3.5-flash-lite` accepts the full param set (verified 2026-09-26).
 
@@ -171,6 +171,9 @@ Fix applied: real keys rewritten into `llm.keys` (`openai-compatible` from `.env
 Regression guards:
 - After ANY settings restore, check `llm.keys` holds real key material (lengths, never the literal `"set"`), then `docker restart sub-wave-controller` and confirm no `Unauthorized`/`INVALID_ARGUMENT` in logs.
 - Keep prod controller hot-patched from this repo (`deploy_controller.sh`); a GHCR pull wipes it and re-opens both faults. Long-term fix is an image bump to 1.16+.
+
+### TTS safety flags / 2026-09-29 — checked means BLOCK (was inverted), TTS ignores them
+`geminiSafety` checked = block that category (code was backwards). The flags only work on the native `google` LLM leg via per-call providerOptions — the old model-construction arg never reached the wire (proven by fetch capture), and the TTS sidecar's Interactions API takes no safety params (SDK strips them), so TTS always renders under Google defaults. Deploy scripts set `COPYFILE_DISABLE=1` — macOS AppleDouble `._` files in the tarball crash-looped the controller on boot. Fallback model is now `gemini-2.5-flash-lite` (`gemini-2.5-flash` retired for this key).
 
 ### Icecast Admin 429 (Too Many Failed Attempts)
 If the main web dashboard reports: `can’t reach Icecast admin: /listeners/connections failed (429): too many failed attempts, try again later`, this means a client or script has hit the API with invalid credentials too many times, triggering the controller's `MAX_AUTH_FAILURES` IP lockout in `controller/src/middleware/auth.ts`.

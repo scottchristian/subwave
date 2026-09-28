@@ -734,8 +734,9 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             </div>
             <div className="field-hint mt-2">
               Google-only content blocking, applied on the native <code>google</code> provider
-              leg and the Gemini TTS sidecar. Other providers ignore it.
-              By default, Gemini heavily filters output — uncheck to allow swearing or sensitive topics.
+              leg. Check a category to have Gemini block it; uncheck to allow swearing or
+              sensitive topics. (The Gemini TTS sidecar always renders under Google defaults —
+              these flags don&apos;t reach it.) Other providers ignore them.
             </div>
           </div>
           )}
