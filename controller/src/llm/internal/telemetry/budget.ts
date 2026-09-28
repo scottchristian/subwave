@@ -70,3 +70,31 @@ export async function seedDailyUsageFromLog(): Promise<number> {
   bucketTokens = seeded;
   return seeded;
 }
+
+
+
+
+// TTS character tracking (called from log.ts)
+let ttsCharsTodayValue = 0;
+
+export function addDailyTtsUsage(chars: number): void {
+  if (!Number.isFinite(chars) || chars <= 0) return;
+  ttsCharsTodayValue += chars;
+}
+
+export function dailyTtsCharsUsed(): number {
+  return ttsCharsTodayValue;
+}
+
+// Peak listeners tracking (called from broadcast/listeners.ts)
+let peakListenersTodayValue = 0;
+
+export function addPeakListeners(count: number): void {
+  if (!Number.isFinite(count) || count <= 0) return;
+  if (count > peakListenersTodayValue) peakListenersTodayValue = count;
+}
+
+export function peakListenersToday(): number {
+  return peakListenersTodayValue;
+}
+

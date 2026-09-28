@@ -271,6 +271,7 @@ const skillCohostsSchema = z.preprocess(
 // persona.ts) because this module may import only zod — the mirror is one
 // flat file. scripts/skill-voice.test.ts pins them equal to the persona
 // originals, the same posture as the three tag-regex declarations.
+<<<<<<< HEAD
 //
 // Why the two lists must match at all: a skill pins the SAME engine vocabulary
 // a persona does, so a skill must never become the one surface where a valid,
@@ -279,6 +280,8 @@ const skillCohostsSchema = z.preprocess(
 // the pin in scripts/skill-voice.test.ts is what makes the omission fail loudly
 // rather than quietly leaving one surface behind.
 // ─────────────────────────────────────────────────────────────────────────
+=======
+>>>>>>> 9ddfb986 (feat(skills): per-skill TTS voice override)
 export const SKILL_VOICE_ENGINES = [
   'piper',
   'kokoro',
@@ -286,7 +289,10 @@ export const SKILL_VOICE_ENGINES = [
   'pocket-tts',
   'cloud',
   'remote',
+<<<<<<< HEAD
   'gemini',
+=======
+>>>>>>> 9ddfb986 (feat(skills): per-skill TTS voice override)
 ] as const;
 
 export const SKILL_VOICE_PROVIDERS = [

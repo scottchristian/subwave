@@ -38,6 +38,7 @@ const { skillVoiceFor } = await import('../src/skills/_agent.js');
 
 test('skill voice vocabularies match the persona originals', async () => {
   const persona = await import('../src/schemas/persona.js');
+<<<<<<< HEAD
   // The message names the fix, because this pin is the ONLY thing that catches
   // a new TTS_ENGINES entry arriving without its restated copy here — and a
   // bare deepEqual diff reads as "these two lists drifted" with no next step.
@@ -53,6 +54,9 @@ test('skill voice vocabularies match the persona originals', async () => {
       : `SKILL_VOICE_ENGINES has ${extra.join(', ')} but persona TTS_ENGINES does `
         + `not — remove it, or the engines the two surfaces accept have diverged.`,
   );
+=======
+  assert.deepEqual([...SKILL_VOICE_ENGINES], [...persona.TTS_ENGINES]);
+>>>>>>> 9ddfb986 (feat(skills): per-skill TTS voice override)
   assert.deepEqual([...SKILL_VOICE_PROVIDERS], [...persona.TTS_CLOUD_PROVIDERS]);
 });
 
