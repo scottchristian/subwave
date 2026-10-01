@@ -40,7 +40,9 @@ import {
 } from '../src/util/google-key-pool.js';
 import {
   GEMINI_NO_HINT_MAX_MS,
+  GEMINI_AUTH_PARK_MS,
   GEMINI_NO_HINT_MIN_MS,
+  classifyGeminiFailure,
   hasDailyQuotaViolation,
   noHintCooldownMs,
   parseDurationMs,
@@ -495,6 +497,178 @@ test('an exhausted pool costs exactly ONE attempt per key, never a second pass',
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+// ─── documented Interactions API error codes ───────────────────────────────
+// Google publishes a machine-readable `error.code`. Where it exists it beats
+// inferring intent from a quotaId substring, and it opens two cases the
+// status-only design got wrong: a DAILY quota says so outright, and a rejected
+// credential (401) is precisely the thing a pool exists to route around.
+
+const code = (c: string, extra: Record<string, unknown> = {}) =>
+  JSON.stringify({ error: { code: c, message: c, ...extra } });
+
+test('error.code classifies the failures that change behaviour', () => {
+  assert.equal(classifyGeminiFailure(code('quota_exceeded')), 'daily');
+  assert.equal(classifyGeminiFailure(code('rate_limit_exceeded')), 'burst');
+  assert.equal(classifyGeminiFailure(code('too_many_requests')), 'burst');
+  assert.equal(classifyGeminiFailure(code('authentication')), 'auth');
+  assert.equal(classifyGeminiFailure(code('payment_required')), 'billing');
+});
+
+test('generation-blocked codes are the CONTENT being refused, not a bad key', () => {
+  // Every one of these means another key would refuse the same input, so
+  // rotating would burn the whole pool to no effect.
+  for (const c of ['safety', 'recitation', 'language', 'prohibited_content', 'spii',
+    'blocklist', 'content_blocked', 'image_safety', 'malformed_function_call',
+    'missing_thought_signature']) {
+    assert.equal(classifyGeminiFailure(code(c)), 'other', `${c} must not read as a key problem`);
+  }
+});
+
+test('a transient 503 is not a key problem either', () => {
+  for (const c of ['service_unavailable', 'api_error', 'deadline_exceeded',
+    'invalid_request', 'model_not_found', 'unimplemented']) {
+    assert.equal(classifyGeminiFailure(code(c)), 'other', `${c} must not read as a key problem`);
+  }
+});
+
+test('a documented quota_exceeded needs no substring guess at all', () => {
+  // The body Google sends for a daily breach may carry no PerDay quotaId — the
+  // old heuristic would have called this 'other' and parked it for the seconds
+  // RetryInfo asked, which is the loop this whole distinction exists to stop.
+  const bare = code('quota_exceeded');
+  assert.equal(hasDailyQuotaViolation(bare), false, 'no quotaId to sniff — code carries it alone');
+  assert.equal(classifyGeminiFailure(bare), 'daily');
+  assert.ok(resolveGeminiCooldownMs(bare) >= GEMINI_NO_HINT_MIN_MS);
+});
+
+test('an invalid credential parks for a day; billing is never parked', () => {
+  assert.equal(resolveGeminiCooldownMs(code('authentication')), GEMINI_AUTH_PARK_MS);
+  // 402 says "don't retry" and is usually shared by every key on the project;
+  // parking it would take the station down quietly instead of surfacing it.
+  assert.equal(classifyGeminiFailure(code('payment_required')), 'billing');
+});
+
+test('a gateway that drops error.code still classifies via details[]', () => {
+  // A proxy or gateway in front of the API can reshape the error body, and an
+  // older API surface may never have sent `code` at all; the details fallback is
+  // what keeps this working when the code is gone.
+  const reshaped = JSON.stringify({ error: { details: [
+    { '@type': 'type.googleapis.com/google.rpc.QuotaFailure',
+      violations: [{ quotaId: 'generate_content_free_tier_requests_per_project_per_day' }] },
+  ] } });
+  assert.equal(classifyGeminiFailure(reshaped), 'daily');
+  assert.equal(classifyGeminiFailure(JSON.stringify({ error: { details: [
+    { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '4s' }] } })), 'burst');
+});
+
+test('an auth failure rotates the pool — the one non-429 that must', async () => {
+  setPool(K1, K2);
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  const sent: string[] = [];
+  let call = 0;
+  globalThis.fetch = (async (_u: any, init: any) => {
+    sent.push(new Headers(init?.headers || {}).get('x-goog-api-key') || '');
+    call += 1;
+    if (call === 1) {
+      return new Response(code('authentication'), { status: 401, statusText: 'Unauthorized' });
+    }
+    return new Response('{}', { status: 200 });
+  }) as typeof fetch;
+  try {
+    const res = await googleKeyFetch('https://example.test/v1/x', {});
+    assert.equal(res.status, 200);
+    assert.deepEqual(sent, [K1, K2], 'a rejected credential must move to the next key');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('billing and content blocks do NOT rotate — they would fail identically', async () => {
+  for (const [status, c] of [[402, 'payment_required'], [403, 'permission_denied'], [503, 'service_unavailable']] as const) {
+    setPool(K1, K2);
+    const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+    const realFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(code(c), { status });
+    }) as typeof fetch;
+    try {
+      const res = await googleKeyFetch('https://example.test/v1/x', {});
+      assert.equal(res.status, status);
+      assert.equal(calls, 1, `${c} must reach the operator, not burn the pool`);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  }
+});
+
+// ─── escalating holds ───────────────────────────────────────────────────────
+// An exhausted pool is FREE per request (held keys are skipped with no HTTP),
+// so the only real cost is how OFTEN a dead key is re-probed. A flat one-minute
+// hold means a key whose daily quota is mislabelled as a rate limit is probed
+// every minute for the rest of the day.
+
+test('an unhinted burst hold escalates with consecutive failures', () => {
+  const burst = code('rate_limit_exceeded');   // labelled, but no RetryInfo
+  const lapsed = [0, 1, 2, 3, 4, 5, 6].map(n =>
+    resolveGeminiCooldownMs(burst, () => 0.5, n + 1));
+  for (let i = 1; i < lapsed.length; i++) {
+    assert.ok(lapsed[i] >= lapsed[i - 1], `hold must not shrink: ${lapsed[i - 1]} -> ${lapsed[i]}`);
+  }
+  assert.equal(lapsed[0], 60_000, 'first unhinted burst is the short one');
+  assert.ok(lapsed.at(-1)! <= 3 * 60 * 60 * 1000, 'escalation is capped');
+  // A key that keeps failing converges instead of climbing forever.
+  assert.equal(lapsed.at(-1), resolveGeminiCooldownMs(burst, () => 0.5, 99));
+});
+
+test('escalation NEVER overrides an explicit RetryInfo', () => {
+  // Google said twenty seconds. Holding the key a minute "because it keeps
+  // failing" would shrink the pool for no reason — the whole point of the burst
+  // class is that it clears fast, and the hint is the only thing we actually
+  // know about when it will.
+  const hinted = JSON.stringify({ error: {
+    code: 'rate_limit_exceeded',
+    details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '20s' }],
+  } });
+  for (const n of [1, 2, 5, 50]) {
+    assert.equal(resolveGeminiCooldownMs(hinted, () => 0.5, n), 20_000,
+      `strike ${n} must still honour the 20s hint`);
+  }
+});
+
+test('a key that succeeds has its escalation history forgotten', () => {
+  setPool(K1, K2);
+  const burst = code('rate_limit_exceeded');
+  reportKeyFailure(K1, burst);
+  reportKeyFailure(K1, burst);
+  reportKeyFailure(K1, burst);
+  assert.equal(poolStatus()[0].strikes, 3);
+  reportKeySuccess(K1);
+  assert.equal(poolStatus()[0].strikes, 0, 'a recovered key starts fresh');
+  // And its next failure is back to the short interval, not the escalated one.
+  const after = reportKeyFailure(K1, burst);
+  assert.ok(after <= 60_000, `expected the short interval again, got ${after}ms`);
+});
+
+test('a burst key is re-probed rarely, not every minute, once it keeps failing', () => {
+  // The end-to-end claim: with a key that never recovers, the number of probes
+  // over an hour collapses from 60 to single digits.
+  setPool(K1, K2);
+  const burst = code('rate_limit_exceeded');
+  let probes = 0;
+  const oneHourMs = 60 * 60 * 1000;
+  let elapsed = 0;
+  while (elapsed < oneHourMs) {
+    // The hold, then wait it out, then the next probe.
+    const held = reportKeyFailure(K1, burst);
+    elapsed += held;
+    probes += 1;
+  }
+  assert.ok(probes <= 8, `expected single-digit probes in an hour, got ${probes}`);
 });
 
 test('with no pool configured the transport is exactly the SDK transport', async () => {
