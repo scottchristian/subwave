@@ -8,6 +8,7 @@ import { clearPoolCache } from '../../music/picker.js';
 import { clearNavidromeCache } from '../../doctor.js';
 import { refreshAutoPlaylist } from '../../broadcast/scheduler.js';
 import { applyNavidromeToLiveConfig, saveSetupConfig } from '../../setup/config.js';
+import { invalidatePool, poolSize, poolStatus } from '../../util/google-key-pool.js';
 import * as library from '../../music/library.js';
 import * as jingles from '../../broadcast/jingles.js';
 import * as settings from '../../settings.js';
@@ -21,6 +22,10 @@ import { queue } from '../../broadcast/queue.js';
 import { handoverOffsetMinutes } from '../../broadcast/handover-policy.js';
 import { streamStatus } from '../../broadcast/liquidsoap-control.js';
 import { requireAdmin } from '../../middleware/auth.js';
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
+import { generateText } from 'ai';
+import { briefLlmError } from './llm.js';
+import { GOOGLE_KEYS_ENV, GOOGLE_KEY_ENV, poolKeys } from '../../util/google-key-pool.js';
 import { validateSettingsBody } from '../../middleware/validate.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../../setup/secrets.js';
 import { taggerView } from '../../broadcast/tagger.js';
@@ -192,6 +197,13 @@ router.get('/settings', requireAdmin, async (req, res) => {
         FISH_API_KEY: !!process.env.FISH_API_KEY,
         ANTHROPIC_API_KEY: !!process.env.ANTHROPIC_API_KEY,
         GOOGLE_GENERATIVE_AI_API_KEY: !!process.env.GOOGLE_GENERATIVE_AI_API_KEY,
+        // Google key POOL state. Fingerprints and hold timers only — no key
+        // material ever crosses this boundary. `count` drives the UI's
+        // single-key vs pooled-key rendering.
+        GOOGLE_KEY_POOL: {
+          count: poolSize(),
+          keys: poolStatus(),
+        },
         DEEPSEEK_API_KEY: !!process.env.DEEPSEEK_API_KEY,
         OPENROUTER_API_KEY: !!process.env.OPENROUTER_API_KEY,
         REQUESTY_API_KEY: !!process.env.REQUESTY_API_KEY,
@@ -260,10 +272,75 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
       return res.json({ saved: [] });
     }
     await saveSecrets(patch);
+    // saveSecrets writes process.env, but the Google pool memoizes its parsed
+    // key list for a couple of seconds. Drop that memo here so the field's
+    // "takes effect immediately" is true rather than nearly true — this is the
+    // single writer for secrets, so this is the only place it can go stale.
+    if ('GOOGLE_GENERATIVE_AI_API_KEYS' in patch || 'GOOGLE_GENERATIVE_AI_API_KEY' in patch) {
+      invalidatePool();
+    }
     res.json({ saved: Object.keys(patch) });
   } catch (err: unknown) {
     console.error('[settings/secrets]', err);
     res.status(400).json({ error: 'Failed to save secrets' });
+  }
+});
+
+// Google key pool maintenance. Addresses keys by INDEX, never by value: the
+// client is only ever sent fingerprints, so it cannot reconstruct the pool and
+// cannot ask us to delete a key it cannot name. Index is validated against a
+// fresh read of the stored pool, so a stale index from a concurrent add is a
+// 400 rather than the wrong key going away.
+router.post('/settings/google-key-pool/remove', requireAdmin, async (req, res) => {
+  const index = (req.body || {}).index;
+  if (!Number.isInteger(index) || index < 0) {
+    return res.status(400).json({ error: 'index must be a non-negative integer' });
+  }
+  const keys = poolKeys();
+  if (index >= keys.length) return res.status(400).json({ error: `no key at index ${index}` });
+  const next = keys.filter((_, i) => i !== index);
+  try {
+    // An emptied pool clears BOTH vars: leaving the legacy single-key var set
+    // would silently resurrect the key the operator just removed.
+    if (next.length) {
+      await saveSecrets({ [GOOGLE_KEYS_ENV]: next.join(',') });
+    } else {
+      await saveSecrets({ [GOOGLE_KEYS_ENV]: '', [GOOGLE_KEY_ENV]: '' });
+      delete process.env[GOOGLE_KEYS_ENV];
+      delete process.env[GOOGLE_KEY_ENV];
+    }
+    invalidatePool();
+    res.json({ ok: true, count: next.length });
+  } catch (err) {
+    console.error('[settings/google-key-pool/remove]', err);
+    res.status(500).json({ error: 'Failed to update the key pool' });
+  }
+});
+
+// Test ONE pooled key against the real API. Goes through the same provider
+// path the station uses, but pins the key so a held key can be checked without
+// disturbing the rotation state.
+router.post('/settings/google-key-pool/test', requireAdmin, async (req, res) => {
+  const index = (req.body || {}).index;
+  if (!Number.isInteger(index) || index < 0) {
+    return res.status(400).json({ error: 'index must be a non-negative integer' });
+  }
+  const keys = poolKeys();
+  const key = keys[index];
+  if (!key) return res.status(400).json({ error: `no key at index ${index}` });
+  try {
+    const llm = settings.get().llm || {};
+    const model = llm.provider === 'google' && llm.model ? llm.model : 'gemini-2.5-flash';
+    const m = createGoogleGenerativeAI({ apiKey: key })(model);
+    await generateText({
+      model: m,
+      prompt: 'Reply with the single word OK.',
+      maxOutputTokens: 32,
+      abortSignal: AbortSignal.timeout(15000),
+    });
+    res.json({ ok: true, message: 'Key responded' });
+  } catch (err) {
+    res.json({ ok: false, message: briefLlmError(err) });
   }
 });
 

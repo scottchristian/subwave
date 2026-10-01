@@ -1,0 +1,343 @@
+// Pinned behaviour for the Google key pool and its cooldown policy.
+//
+// Three contracts:
+//   • the cooldown parser distinguishes DAILY exhaustion (park hours) from a
+//     per-minute throttle (honour the hint), because getting that backwards
+//     either burns another 429 on a dead key or parks a key for three hours
+//     over a one-second wait;
+//   • selection is PRIMARY-FIRST, skipping held keys, and the pool terminates
+//     rather than looping when every key is spent;
+//   • rotation actually re-stamps the outgoing header, which is the whole
+//     point — a green unit test on the selector proves nothing if the transport
+//     never used it.
+//
+// Run: `npm test -- google-key-pool`.
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+process.env.STATE_DIR ??= mkdtempSync(join(tmpdir(), 'google-pool-'));
+
+import {
+  __resetHoldsForTest,
+  allKeysHeld,
+  currentKey,
+  fingerprint,
+  holdRemainingMs,
+  invalidatePool,
+  parsePool,
+  poolKeys,
+  poolSize,
+  poolStatus,
+  reportKeyFailure,
+  reportKeySuccess,
+} from '../src/util/google-key-pool.js';
+import {
+  GEMINI_NO_HINT_MAX_MS,
+  GEMINI_NO_HINT_MIN_MS,
+  hasDailyQuotaViolation,
+  noHintCooldownMs,
+  parseDurationMs,
+  parseGeminiRetryDelayMs,
+  resolveGeminiCooldownMs,
+} from '../src/llm/internal/provider/gemini-cooldown.js';
+
+const K1 = 'AIzaSyKeyOne0000000000000000000000000';
+const K2 = 'AIzaSyKeyTwo0000000000000000000000000';
+const K3 = 'AIzaSyKeyThree000000000000000000000000';
+
+function setPool(...keys: string[]) {
+  process.env.GOOGLE_GENERATIVE_AI_API_KEYS = keys.join(',');
+  delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+  invalidatePool();
+  __resetHoldsForTest();
+}
+
+// ─── duration + hint parsing ────────────────────────────────────────────────
+
+test('durations parse across every unit Google emits', () => {
+  assert.equal(parseDurationMs('22s'), 22_000);
+  assert.equal(parseDurationMs('500ms'), 500);
+  assert.equal(parseDurationMs('2m'), 120_000);
+  assert.equal(parseDurationMs('1.5h'), 5_400_000);
+  assert.equal(parseDurationMs('1d'), 86_400_000);
+  assert.equal(parseDurationMs('nonsense'), null);
+  assert.equal(parseDurationMs(null), null);
+  assert.equal(parseDurationMs('-5s'), null);
+});
+
+test('RetryInfo.retryDelay is the authoritative hint', () => {
+  const body = JSON.stringify({
+    error: {
+      message: 'Quota exceeded',
+      details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '34s' }],
+    },
+  });
+  assert.equal(parseGeminiRetryDelayMs(body), 34_000);
+});
+
+test('prose "please retry in" is honoured when there is no detail', () => {
+  const body = JSON.stringify({ error: { message: 'Resource exhausted. Please retry in 7s.' } });
+  assert.equal(parseGeminiRetryDelayMs(body), 7_000);
+});
+
+test('a body with no hint parses as null, not a guess', () => {
+  assert.equal(parseGeminiRetryDelayMs(JSON.stringify({ error: { message: 'nope' } })), null);
+  assert.equal(parseGeminiRetryDelayMs(''), null);
+  assert.equal(parseGeminiRetryDelayMs(undefined), null);
+});
+
+// ─── the daily vs per-minute decision ───────────────────────────────────────
+
+test('a PerDay quotaId is detected from details[]', () => {
+  // Both spellings occur in the wild. Matching only the bare `perday` form
+  // silently misses the underscored one, which is the common one.
+  for (const quotaId of [
+    'generate_content_free_tier_requests_per_project_per_day',
+    'generate_requests_per_day',
+    'requestsPerDay',
+  ]) {
+    const body = JSON.stringify({
+      error: {
+        details: [{
+          '@type': 'type.googleapis.com/google.rpc.QuotaFailure',
+          violations: [{ quotaId }],
+        }],
+      },
+    });
+    assert.equal(hasDailyQuotaViolation(body), true, `missed ${quotaId}`);
+  }
+});
+
+test('a per-minute quotaId is not daily', () => {
+  const body = JSON.stringify({
+    error: {
+      details: [{
+        '@type': 'type.googleapis.com/google.rpc.QuotaFailure',
+        violations: [{ quotaId: 'requests_per_minute' }],
+      }],
+    },
+  });
+  assert.equal(hasDailyQuotaViolation(body), false);
+});
+
+test('daily exhaustion parks for hours, ignoring any short RetryInfo', () => {
+  // The trap: Google attaches a seconds-scale RetryInfo even to a dead-for-today
+  // key. Honouring it means sleeping, waking, and eating another 429.
+  const body = JSON.stringify({
+    error: {
+      message: 'quota exceeded',
+      details: [
+        { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '5s' },
+        {
+          '@type': 'type.googleapis.com/google.rpc.QuotaFailure',
+          violations: [{ quotaId: 'generate_requests_per_model_per_day' }],
+        },
+      ],
+    },
+  });
+  assert.equal(hasDailyQuotaViolation(body), true);
+  const ms = resolveGeminiCooldownMs(body);
+  assert.ok(ms >= GEMINI_NO_HINT_MIN_MS && ms <= GEMINI_NO_HINT_MAX_MS,
+    `expected an hours-scale park, got ${ms}ms`);
+});
+
+test('a plain per-minute 429 takes Google at its word', () => {
+  const body = JSON.stringify({
+    error: { details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '3s' }] },
+  });
+  assert.equal(resolveGeminiCooldownMs(body), 3_000);
+});
+
+test('no hint parks on the hours scale, randomised', () => {
+  assert.equal(noHintCooldownMs(() => 0), GEMINI_NO_HINT_MIN_MS);
+  assert.ok(noHintCooldownMs(() => 0.999) <= GEMINI_NO_HINT_MAX_MS);
+  const a = noHintCooldownMs(() => 0.1);
+  const b = noHintCooldownMs(() => 0.9);
+  assert.notEqual(a, b, 'ten keys must not all wake on the same second');
+});
+
+// ─── pool parsing ───────────────────────────────────────────────────────────
+
+test('the pool splits on commas, trims, dedupes and bounds', () => {
+  assert.deepEqual(parsePool(`${K1}, ${K2} ,${K1}`), [K1, K2]);
+  assert.deepEqual(parsePool(''), []);
+  assert.deepEqual(parsePool(null), []);
+  assert.equal(parsePool(Array.from({ length: 80 }, (_, i) => `k${i}`).join(',')).length, 50);
+});
+
+test('a single legacy key is a one-key pool, so nothing changes for those stations', () => {
+  delete process.env.GOOGLE_GENERATIVE_AI_API_KEYS;
+  process.env.GOOGLE_GENERATIVE_AI_API_KEY = K1;
+  invalidatePool();
+  __resetHoldsForTest();
+  assert.deepEqual(poolKeys(), [K1]);
+  assert.equal(currentKey(), K1);
+});
+
+test('an unconfigured pool is inert: currentKey is empty, not a crash', () => {
+  delete process.env.GOOGLE_GENERATIVE_AI_API_KEYS;
+  delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+  invalidatePool();
+  __resetHoldsForTest();
+  assert.equal(poolSize(), 0);
+  assert.equal(currentKey(), '');
+  assert.equal(allKeysHeld(), false, 'an empty pool must not read as exhausted');
+});
+
+// ─── selection: primary-first ───────────────────────────────────────────────
+
+test('selection is primary-first, not round-robin', () => {
+  setPool(K1, K2, K3);
+  assert.equal(currentKey(), K1);
+  reportKeyFailure(K1, JSON.stringify({ error: { message: 'Please retry in 30s.' } }));
+  assert.equal(currentKey(), K2, 'must move down the list');
+  reportKeyFailure(K2, JSON.stringify({ error: { message: 'Please retry in 30s.' } }));
+  assert.equal(currentKey(), K3);
+});
+
+test('a successful key clears its hold so it is retried later', () => {
+  setPool(K1, K2);
+  reportKeyFailure(K1, 'Please retry in 5s.');
+  assert.ok(holdRemainingMs(K1) > 0);
+  reportKeySuccess(K1);
+  assert.equal(holdRemainingMs(K1), 0);
+  assert.equal(currentKey(), K1, 'key 1 must come back once it works again');
+});
+
+test('an expired hold is reaped, not remembered forever', async () => {
+  setPool(K1, K2);
+  reportKeyFailure(K1, JSON.stringify({
+    error: { details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '5ms' }] },
+  }));
+  assert.equal(currentKey(), K2, 'a live hold is skipped');
+  // Wait past the window rather than racing it.
+  await new Promise(r => setTimeout(r, 25));
+  assert.equal(holdRemainingMs(K1), 0, 'the hold must lapse, not stick');
+  assert.equal(currentKey(), K1, 'key 1 must be retried once its window passes');
+  assert.equal(poolStatus()[0].held, false);
+});
+
+test('an exhausted pool still returns a key so one-shot callers still work', () => {
+  setPool(K1, K2);
+  reportKeyFailure(K1, 'Please retry in 5s.');
+  reportKeyFailure(K2, 'Please retry in 5s.');
+  assert.equal(allKeysHeld(), true);
+  // Deliberately NOT empty: a preview or Test-key button gets a real 429 with
+  // a real RetryInfo instead of failing on a transient internal state.
+  assert.equal(currentKey(), K1);
+});
+
+// ─── status redaction ───────────────────────────────────────────────────────
+
+test('pool status exposes fingerprints and timers, never key material', () => {
+  setPool(K1, K2);
+  reportKeyFailure(K1, 'Please retry in 30s.');
+  const status = poolStatus();
+  assert.equal(status.length, 2);
+  const serialised = JSON.stringify(status);
+  assert.ok(!serialised.includes(K1), 'a raw key leaked into pool status');
+  assert.ok(!serialised.includes(K2), 'a raw key leaked into pool status');
+  assert.equal(status[0].held, true);
+  assert.equal(status[1].held, false);
+  assert.equal(status[1].current, true);
+  assert.equal(fingerprint(K1), `••••${K1.slice(-4)}`);
+});
+
+// ─── the transport actually rotates ─────────────────────────────────────────
+
+test('googleKeyFetch re-stamps the header with the next live key', async () => {
+  setPool(K1, K2);
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+
+  const sent: string[] = [];
+  let call = 0;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (_url: any, init: any) => {
+    const h = new Headers(init?.headers || {});
+    sent.push(h.get('x-goog-api-key') || '');
+    call += 1;
+    // First call is refused for quota; the retry must carry the OTHER key.
+    if (call === 1) {
+      return new Response(JSON.stringify({ error: { message: 'Please retry in 20s.' } }), {
+        status: 429, statusText: 'Too Many Requests',
+      });
+    }
+    return new Response('{}', { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    const res = await googleKeyFetch('https://example.test/v1/models/x:generateContent', { method: 'POST' });
+    assert.equal(res.status, 200, 'rotation should have produced a success');
+    assert.deepEqual(sent, [K1, K2], 'second attempt must carry the next key');
+    // The exhausted key is parked for the hinted window, not for hours: this
+    // body is a per-minute 429, not a PerDay violation.
+    const held = holdRemainingMs(K1);
+    assert.ok(held > 0 && held <= 25_000, `expected the hinted ~20s park, got ${held}ms`);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('an exhausted pool surfaces the 429 instead of looping', async () => {
+  setPool(K1);
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ error: { message: 'Please retry in 20s.' } }), { status: 429 });
+  }) as typeof fetch;
+  try {
+    const res = await googleKeyFetch('https://example.test/v1/x', {});
+    assert.equal(res.status, 429, 'the 429 must reach the caller so failover can escalate');
+    assert.equal(calls, 1, 'must not re-issue against the same spent key');
+    // The body survives the read, which is what lets withFailover classify it.
+    const body = await res.json();
+    assert.match(body.error.message, /retry in 20s/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('a non-quota failure never rotates — a 403 is a config problem, not a spent key', async () => {
+  setPool(K1, K2);
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ error: { message: 'permission denied' } }), { status: 403 });
+  }) as typeof fetch;
+  try {
+    const res = await googleKeyFetch('https://example.test/v1/x', {});
+    assert.equal(res.status, 403);
+    assert.equal(calls, 1, 'must not paper over a permissions error with another key');
+    assert.equal(allKeysHeld(), false, 'a 403 must not park a key');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('with no pool configured the transport is exactly the SDK transport', async () => {
+  delete process.env.GOOGLE_GENERATIVE_AI_API_KEYS;
+  delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+  invalidatePool();
+  __resetHoldsForTest();
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  let seen: string | null = null;
+  globalThis.fetch = (async (_u: any, init: any) => {
+    seen = new Headers(init?.headers || {}).get('x-goog-api-key');
+    return new Response('{}', { status: 200 });
+  }) as typeof fetch;
+  try {
+    await googleKeyFetch('https://example.test/v1/x', {});
+    assert.equal(seen, null, 'must leave the provider-built header untouched');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
