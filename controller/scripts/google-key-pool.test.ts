@@ -474,6 +474,29 @@ test('the add endpoint appends from entries and refuses a duplicate', async () =
   assert.match(body, /entries\.length >= GOOGLE_POOL_MAX/);
 });
 
+test('an exhausted pool costs exactly ONE attempt per key, never a second pass', async () => {
+  // Found by the live rotation probe: the old check compared `next === key`,
+  // and currentKey() falls back to the head once everything is held — so the
+  // last real key always looked like a change and the head was tried a second
+  // time. Nine requests for eight keys, one of them guaranteed to fail.
+  setPool(K1, K2, K3);
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  const seen: string[] = [];
+  globalThis.fetch = (async (_u: any, init: any) => {
+    seen.push(new Headers(init?.headers || {}).get('x-goog-api-key') || '');
+    return new Response(JSON.stringify({ error: { message: 'Please retry in 20s.' } }), { status: 429 });
+  }) as typeof fetch;
+  try {
+    const res = await googleKeyFetch('https://example.test/v1/x', {});
+    assert.equal(res.status, 429);
+    assert.equal(seen.length, 3, `one attempt per key, got ${seen.length} for a 3-key pool`);
+    assert.deepEqual(seen, [K1, K2, K3], 'each key tried exactly once, in order');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test('with no pool configured the transport is exactly the SDK transport', async () => {
   delete process.env.GOOGLE_GENERATIVE_AI_API_KEYS;
   delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;

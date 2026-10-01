@@ -12,6 +12,7 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { config } from '../../../config.js';
 import * as settings from '../../../settings.js';
 import {
+  allKeysHeld,
   currentKey,
   fingerprint,
   reportKeyFailure,
@@ -93,10 +94,13 @@ export async function googleKeyFetch(url: any, init?: any): Promise<Response> {
   const body = await res.text().catch(() => '');
   const heldMs = reportKeyFailure(key, body);
   const next = currentKey();
-  // `currentKey()` falls back to the first key once everything is held, so an
-  // unchanged key means the pool is spent: hand the 429 up so the caller
+  // Ask whether the POOL is spent, not whether the next key differs. Comparing
+  // `next === key` costs one wasted request per exhausted pool: currentKey()
+  // falls back to the head once everything is held, so the last real key always
+  // looked like a "change" and re-tried the head a second time before the 429
+  // finally surfaced. One attempt per key, then hand it up so the caller
   // escalates to the configured backup leg.
-  if (next === key) {
+  if (allKeysHeld()) {
     console.log(`[google] every pooled key is on hold — returning the ${res.status} upstream`);
     return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers });
   }
