@@ -317,6 +317,32 @@ router.post('/settings/google-key-pool/remove', requireAdmin, async (req, res) =
   }
 });
 
+// Reorder the pool. The ORDER is the feature — free keys belong first so the
+// paid key at the end absorbs only what the free tiers can't — so reordering
+// has to exist rather than being fixed at insertion time.
+router.post('/settings/google-key-pool/move', requireAdmin, async (req, res) => {
+  const { from, to } = (req.body || {});
+  if (!Number.isInteger(from) || !Number.isInteger(to)) {
+    return res.status(400).json({ error: 'from and to must be integers' });
+  }
+  const keys = poolKeys();
+  if (from < 0 || from >= keys.length || to < 0 || to >= keys.length) {
+    return res.status(400).json({ error: 'from/to out of range' });
+  }
+  if (from === to) return res.json({ ok: true, count: keys.length });
+  const next = [...keys];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  try {
+    await saveSecrets({ [GOOGLE_KEYS_ENV]: next.join(',') });
+    invalidatePool();
+    res.json({ ok: true, count: next.length });
+  } catch (err) {
+    console.error('[settings/google-key-pool/move]', err);
+    res.status(500).json({ error: 'Failed to reorder the key pool' });
+  }
+});
+
 // Test ONE pooled key against the real API. Goes through the same provider
 // path the station uses, but pins the key so a held key can be checked without
 // disturbing the rotation state.

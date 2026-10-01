@@ -322,6 +322,45 @@ test('a non-quota failure never rotates — a 403 is a config problem, not a spe
   }
 });
 
+// ─── reordering ─────────────────────────────────────────────────────────────
+// The order IS the feature — free keys first so the paid key at the end absorbs
+// only what the free tiers can't — so moving a key is a first-class operation,
+// and the index arithmetic has to be exact. Dropping the wrong key, or losing
+// one, would silently change which credential the station reaches for.
+
+test('reordering preserves every key exactly once', () => {
+  const reorder = (keys: string[], from: number, to: number) => {
+    const next = [...keys];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    return next;
+  };
+  assert.deepEqual(reorder([K1, K2, K3], 2, 0), [K3, K1, K2], 'last becomes first');
+  assert.deepEqual(reorder([K1, K2, K3], 0, 2), [K2, K3, K1], 'first becomes last');
+  assert.deepEqual(reorder([K1, K2, K3], 1, 1), [K1, K2, K3], 'no-op');
+  // The invariant that matters: nothing duplicated, nothing dropped.
+  for (const [from, to] of [[0, 1], [1, 0], [2, 1], [0, 2], [1, 2], [2, 0]]) {
+    const out = reorder([K1, K2, K3], from, to);
+    assert.deepEqual([...out].sort(), [K1, K2, K3].sort(), `lost a key moving ${from}→${to}`);
+    assert.equal(new Set(out).size, 3, `duplicated a key moving ${from}→${to}`);
+  }
+});
+
+test('the move endpoint validates both bounds and rewrites the whole list', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../src/routes/settings/core.ts', import.meta.url), 'utf8');
+  const start = src.indexOf("router.post('/settings/google-key-pool/move'");
+  assert.ok(start > 0, 'the move endpoint is missing');
+  const body = src.slice(start, src.indexOf('\n});', start));
+  // Both bounds are checked against a FRESH read of the pool, so a stale index
+  // from a concurrent add is a 400 rather than the wrong key moving.
+  assert.match(body, /!Number\.isInteger\(from\) \|\| !Number\.isInteger\(to\)/);
+  assert.match(body, /from < 0 \|\| from >= keys\.length \|\| to < 0 \|\| to >= keys\.length/);
+  // And it persists the whole reordered list, not just the moved entry.
+  assert.match(body, /saveSecrets\(\{ \[GOOGLE_KEYS_ENV\]: next\.join\(','\) \}\)/);
+  assert.match(body, /invalidatePool\(\)/);
+});
+
 test('with no pool configured the transport is exactly the SDK transport', async () => {
   delete process.env.GOOGLE_GENERATIVE_AI_API_KEYS;
   delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;

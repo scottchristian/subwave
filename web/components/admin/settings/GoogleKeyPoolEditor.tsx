@@ -104,6 +104,12 @@ export function GoogleKeyPoolEditor({
     }
   }, [post, onChanged]);
 
+  const moveKey = useCallback(async (from: number, to: number) => {
+    if (from === to) return;
+    const ok = await post('/settings/google-key-pool/move', { from, to });
+    if (ok) onChanged?.();
+  }, [post, onChanged]);
+
   const testKey = useCallback(async (index: number) => {
     setTestingIndex(index);
     try {
@@ -137,6 +143,24 @@ export function GoogleKeyPoolEditor({
                   {k.held ? ` · ${holdLabel(k)}` : ''}
                 </span>
                 <span className="ml-auto flex gap-1">
+                  <Btn
+                    onClick={() => moveKey(k.index, k.index - 1)}
+                    disabled={busy || k.index === 0}
+                    title="Move up"
+                    aria-label={`Move key ${k.index + 1} up`}
+                    className="px-2 py-1 text-[10px]"
+                  >
+                    ↑
+                  </Btn>
+                  <Btn
+                    onClick={() => moveKey(k.index, k.index + 1)}
+                    disabled={busy || k.index === keys.length - 1}
+                    title="Move down"
+                    aria-label={`Move key ${k.index + 1} down`}
+                    className="px-2 py-1 text-[10px]"
+                  >
+                    ↓
+                  </Btn>
                   <Btn
                     onClick={() => testKey(k.index)}
                     disabled={busy || testingIndex === k.index}
@@ -176,34 +200,45 @@ export function GoogleKeyPoolEditor({
         <Btn onClick={addKey} disabled={busy || !adding.trim()}>Add key</Btn>
       </div>
       <p className="mt-1 text-[12px] text-muted">
-        Keys are tried in the order you add them. When one hits a quota limit it
-        is set aside for as long as Google asks and the next one is used; if
-        every key is spent, the station falls back to its configured backup
-        model. Shared by the Gemini DJ and Gemini TTS.
+        Keys are tried in the order you add them — use ↑ ↓ to change that order.
+        When one hits a quota limit it is set aside for as long as Google asks
+        and the next one is used; if every key is spent, the station falls back
+        to its configured backup model. Shared by the Gemini DJ and Gemini TTS.
       </p>
-      <p className="mt-2 text-[12px] text-muted">
-        <strong className="text-ink">Put your free-tier keys first and your paid
-        key last.</strong> That is the point of the pool: the free keys carry
-        the station&rsquo;s normal traffic, and the paid key only covers what
-        they can&rsquo;t once their daily quotas run out.
-      </p>
-      <p className="mt-2 border-l-2 border-[var(--accent)] pl-2 text-[12px] text-muted">
-        <strong className="text-ink">Check Google&rsquo;s terms before you
-        set this up.</strong> Rotating several free-tier keys to work around a
-        single key&rsquo;s quota may conflict with the{' '}
-        <a
-          href="https://developers.google.com/terms"
-          target="_blank"
-          rel="noreferrer noopener"
-          className="underline"
-        >
-          Google APIs Terms of Service
-        </a>{' '}
-        or the Gemini free-tier terms, which can change without notice. Read them
-        and decide for yourself whether your use is permitted &mdash; Subwave
-        can&rsquo;t make that call for you. Set this up only if you&rsquo;re
-        satisfied it is.
-      </p>
+      {/*
+        The multi-key guidance and the terms note appear only once this is
+        actually a POOL rather than a second way to spell one key — nobody
+        should meet a compliance warning for something they haven't done, and
+        the warning is only actionable at the moment they add a second key.
+        `adding.trim()` covers the instant they are about to.
+      */}
+      {(keys.length > 1 || adding.trim().length > 0) && (
+        <>
+          <p className="mt-2 text-[12px] text-muted">
+            <strong className="text-ink">Put your free-tier keys first and your
+            paid key last.</strong> That is the point of the pool: the free keys
+            carry the station&rsquo;s normal traffic, and the paid key only covers
+            what they can&rsquo;t once their daily quotas run out. Reorder with
+            ↑ ↓ if you got the order wrong.
+          </p>
+          <p className="mt-2 border-l-2 border-[var(--accent)] pl-2 text-[12px] text-muted">
+            <strong className="text-ink">Check Google&rsquo;s terms before
+            using more than one key.</strong> Rotating several free-tier keys to
+            work around a single key&rsquo;s quota may conflict with the{' '}
+            <a
+              href="https://developers.google.com/terms"
+              target="_blank"
+              rel="noreferrer noopener"
+              className="underline"
+            >
+              Google APIs Terms of Service
+            </a>{' '}
+            or the Gemini free-tier terms, which can change without notice. Read
+            them and decide for yourself whether your use is permitted &mdash;
+            Subwave can&rsquo;t make that call for you.
+          </p>
+        </>
+      )}
     </div>
   );
 }

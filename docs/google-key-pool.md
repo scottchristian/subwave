@@ -17,7 +17,9 @@ it fails forward through them instead of stopping.
 
 The ordering is the whole feature. Put your free-tier keys first and the paid
 one last, and the paid key absorbs only what the free keys can't cover — which
-is the intended shape, and usually a small fraction of the day's calls.
+is the intended shape, and usually a small fraction of the day's calls. Keys
+are used in the order shown, and **↑ ↓ reorder them**, so getting the order
+right afterwards is a click rather than a re-add.
 
 If **every** key is spent, nothing changes for the worse: the station falls
 back to its configured backup model, exactly as it did before this existed.
@@ -43,7 +45,7 @@ is irrelevant.
 
 **Admin → LLM → Google (Gemini) API key.** Below the existing single-key field
 is the **Gemini key pool**. Paste a key, hit **Add key**, repeat. The pool is
-used in the order you add it.
+used in the order you add it, and **↑ ↓** move a key up or down.
 
 Each entry shows:
 
@@ -111,3 +113,12 @@ key.
 Use **Remove** next to its fingerprint. Removing the last key clears the pool
 entirely, including the legacy single-key variable — otherwise the key you just
 removed would quietly come back.
+
+## When the terms note appears
+
+The multi-key guidance and the terms-of-service warning show up only once the
+pool actually holds more than one key (or the moment you start typing a second
+one). A station with a single key never sees it: nobody should meet a compliance
+warning for something they haven't done, and it is only actionable at the point
+of adding a second key. This page and `README.md` carry it unconditionally,
+because a doc can be read deliberately rather than stumbled into.
