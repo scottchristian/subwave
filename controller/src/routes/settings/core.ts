@@ -25,7 +25,14 @@ import { requireAdmin } from '../../middleware/auth.js';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { generateText } from 'ai';
 import { briefLlmError } from './llm.js';
-import { GOOGLE_KEYS_ENV, GOOGLE_KEY_ENV, poolKeys } from '../../util/google-key-pool.js';
+import {
+  GOOGLE_KEYS_ENV,
+  GOOGLE_KEY_ENV,
+  poolEntries,
+  poolKeys,
+  sanitizeName,
+  serializePool,
+} from '../../util/google-key-pool.js';
 import { validateSettingsBody } from '../../middleware/validate.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../../setup/secrets.js';
 import { taggerView } from '../../broadcast/tagger.js';
@@ -296,14 +303,14 @@ router.post('/settings/google-key-pool/remove', requireAdmin, async (req, res) =
   if (!Number.isInteger(index) || index < 0) {
     return res.status(400).json({ error: 'index must be a non-negative integer' });
   }
-  const keys = poolKeys();
-  if (index >= keys.length) return res.status(400).json({ error: `no key at index ${index}` });
-  const next = keys.filter((_, i) => i !== index);
+  const entries = poolEntries();
+  if (index >= entries.length) return res.status(400).json({ error: `no key at index ${index}` });
+  const next = entries.filter((_, i) => i !== index);
   try {
     // An emptied pool clears BOTH vars: leaving the legacy single-key var set
     // would silently resurrect the key the operator just removed.
     if (next.length) {
-      await saveSecrets({ [GOOGLE_KEYS_ENV]: next.join(',') });
+      await saveSecrets({ [GOOGLE_KEYS_ENV]: serializePool(next) });
     } else {
       await saveSecrets({ [GOOGLE_KEYS_ENV]: '', [GOOGLE_KEY_ENV]: '' });
       delete process.env[GOOGLE_KEYS_ENV];
@@ -325,21 +332,48 @@ router.post('/settings/google-key-pool/move', requireAdmin, async (req, res) => 
   if (!Number.isInteger(from) || !Number.isInteger(to)) {
     return res.status(400).json({ error: 'from and to must be integers' });
   }
-  const keys = poolKeys();
-  if (from < 0 || from >= keys.length || to < 0 || to >= keys.length) {
+  const entries = poolEntries();
+  if (from < 0 || from >= entries.length || to < 0 || to >= entries.length) {
     return res.status(400).json({ error: 'from/to out of range' });
   }
-  if (from === to) return res.json({ ok: true, count: keys.length });
-  const next = [...keys];
+  if (from === to) return res.json({ ok: true, count: entries.length });
+  const next = [...entries];
   const [moved] = next.splice(from, 1);
   next.splice(to, 0, moved);
   try {
-    await saveSecrets({ [GOOGLE_KEYS_ENV]: next.join(',') });
+    // Serialised from ENTRIES, not keys — a reorder that rewrote the pool from
+    // bare keys would strip every label the operator just typed.
+    await saveSecrets({ [GOOGLE_KEYS_ENV]: serializePool(next) });
     invalidatePool();
     res.json({ ok: true, count: next.length });
   } catch (err) {
     console.error('[settings/google-key-pool/move]', err);
     res.status(500).json({ error: 'Failed to reorder the key pool' });
+  }
+});
+
+// Label one key. The name lives inline in the same variable as the key
+// (`key:name`) rather than in a parallel array indexed by position, which is
+// the shape that silently reattaches labels to the wrong credentials the first
+// time a key is removed or moved.
+router.post('/settings/google-key-pool/rename', requireAdmin, async (req, res) => {
+  const { index, name } = (req.body || {});
+  if (!Number.isInteger(index) || index < 0) {
+    return res.status(400).json({ error: 'index must be a non-negative integer' });
+  }
+  if (name != null && typeof name !== 'string') {
+    return res.status(400).json({ error: 'name must be a string' });
+  }
+  const entries = poolEntries().map(e => ({ ...e }));
+  if (index >= entries.length) return res.status(400).json({ error: `no key at index ${index}` });
+  entries[index].name = sanitizeName(name ?? '');
+  try {
+    await saveSecrets({ [GOOGLE_KEYS_ENV]: serializePool(entries) });
+    invalidatePool();
+    res.json({ ok: true, name: entries[index].name });
+  } catch (err) {
+    console.error('[settings/google-key-pool/rename]', err);
+    res.status(500).json({ error: 'Failed to rename the key' });
   }
 });
 

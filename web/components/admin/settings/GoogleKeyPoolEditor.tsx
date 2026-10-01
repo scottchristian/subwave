@@ -26,6 +26,7 @@ const POOL_ENV = 'GOOGLE_GENERATIVE_AI_API_KEYS';
 export interface GooglePoolKey {
   index: number;
   fingerprint: string;
+  name: string;
   held: boolean;
   holdRemainingMs: number;
   reason: 'daily' | 'hint' | 'unknown' | null;
@@ -110,6 +111,14 @@ export function GoogleKeyPoolEditor({
     if (ok) onChanged?.();
   }, [post, onChanged]);
 
+  const renameKey = useCallback(async (index: number, name: string) => {
+    const ok = await post('/settings/google-key-pool/rename', { index, name });
+    // Refresh either way: on failure the stored label is unchanged and the box
+    // must snap back rather than keep showing something that was never saved.
+    if (ok) notify.ok('Key renamed');
+    onChanged?.();
+  }, [post, onChanged]);
+
   const testKey = useCallback(async (index: number) => {
     setTestingIndex(index);
     try {
@@ -134,10 +143,24 @@ export function GoogleKeyPoolEditor({
         </p>
       ) : (
         <>
-          <ul className="mt-2 flex flex-col gap-1">
+          <ul className="mt-2 flex flex-col gap-2">
             {keys.map(k => (
-              <li key={`${k.index}-${k.fingerprint}`} className="flex items-center gap-2 text-[12px]">
-                <code className="min-w-[92px]">{k.fingerprint}</code>
+              <li key={`${k.index}-${k.fingerprint}`} className="flex flex-wrap items-center gap-2 text-[12px]">
+                <input
+                  defaultValue={k.name}
+                  placeholder={k.fingerprint}
+                  aria-label={`Name for key ${k.index + 1}`}
+                  maxLength={60}
+                  // defaultValue + blur, not controlled: a per-keystroke save
+                  // would fight the operator mid-word, and the label is not
+                  // worth a request per character.
+                  onBlur={e => {
+                    const next = e.target.value.trim();
+                    if (next !== k.name) void renameKey(k.index, next);
+                  }}
+                  className="min-w-[140px] border border-input bg-field px-2 py-1 text-[12px] text-foreground placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+                />
+                <code className="min-w-[80px] text-muted">{k.fingerprint}</code>
                 <span className="text-muted">
                   {k.current ? 'in use' : 'standby'}
                   {k.held ? ` · ${holdLabel(k)}` : ''}

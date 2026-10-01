@@ -40,49 +40,101 @@ interface Hold {
   reason: 'daily' | 'hint' | 'unknown';
 }
 
+export interface PoolEntry {
+  key: string;
+  /** Operator's label. Empty = unnamed, and the UI falls back to a fingerprint. */
+  name: string;
+}
+
 let holds = new Map<string, Hold>();
-let poolCache: { keys: string[]; at: number } | null = null;
+let poolCache: { entries: PoolEntry[]; at: number } | null = null;
 
 // Parsed on every access in principle; cached briefly so a hot loop (the DJ
 // fires many calls a minute) does not re-parse the environment each time. The
 // TTL is short enough that a key added at runtime is picked up almost at once.
 const POOL_CACHE_MS = 2_000;
 
+export const GOOGLE_KEY_NAME_MAX = 60;
+
 /**
- * Split a configured pool into keys. Comma-separated on purpose: Google keys
- * never contain a comma, and `secrets.env` is read by dotenv as single-line
- * values — a multi-line quoted list is dropped by that reader with a warning.
+ * Split a configured pool into entries.
+ *
+ * Comma-separated on purpose: Google keys never contain a comma, and
+ * `secrets.env` is read by dotenv as single-line values — a multi-line quoted
+ * list is dropped by that reader with a warning.
+ *
+ * An entry is `key` or `key:name`. The name lives INSIDE the same variable as
+ * the key rather than in a parallel array, because a separate list of names
+ * indexed against a list of keys is exactly the shape that drifts: remove or
+ * reorder a key in one place and the names silently reattach to the wrong
+ * credentials. A Google key is `AIza` plus URL-safe base64 and cannot contain a
+ * colon, so the FIRST colon is an unambiguous split point, and a name may
+ * itself contain colons. Commas are stripped from names on the way in because
+ * they would otherwise split an entry in two.
+ *
+ * An entry with no colon is unnamed — which is what every pre-existing pool
+ * looks like, so this format is a pure superset of the one already on disk.
  */
-export function parsePool(raw: string | undefined | null): string[] {
+export function parsePool(raw: string | undefined | null): PoolEntry[] {
   if (!raw) return [];
-  const out: string[] = [];
+  const out: PoolEntry[] = [];
   const seen = new Set<string>();
   for (const part of String(raw).split(',')) {
-    const key = part.trim();
+    const entry = part.trim();
+    if (!entry) continue;
+    const colon = entry.indexOf(':');
+    const key = (colon === -1 ? entry : entry.slice(0, colon)).trim();
     if (!key || key.length > GOOGLE_KEY_MAX) continue;
+    const name = colon === -1 ? '' : sanitizeName(entry.slice(colon + 1));
     if (seen.has(key)) continue; // a pasted duplicate is one key, not two slots
     seen.add(key);
-    out.push(key);
+    out.push({ key, name });
     if (out.length >= GOOGLE_POOL_MAX) break;
   }
   return out;
 }
 
+/** Commas would split an entry in two; the rest is display-only tidying. The
+ *  whitespace collapse matters: a naive replace would leave `Free,  one` with
+ *  a double space from every separator the operator typed. */
+export function sanitizeName(raw: unknown): string {
+  return String(raw ?? '')
+    .replace(/[,\r\n]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, GOOGLE_KEY_NAME_MAX);
+}
+
+/** Inverse of parsePool. Entries with no name serialise as a bare key, so a
+ *  pool nobody has labelled still reads as a plain list of keys by hand. */
+export function serializePool(entries: PoolEntry[]): string {
+  return entries
+    .map(({ key, name }) => (name ? `${key}:${sanitizeName(name)}` : key))
+    .join(',');
+}
+
 /** The configured pool, or the single legacy key as a one-entry pool. */
-function configuredKeys(): string[] {
+function configuredEntries(): PoolEntry[] {
   const pooled = parsePool(process.env[GOOGLE_KEYS_ENV]);
   if (pooled.length) return pooled;
   const single = (process.env[GOOGLE_KEY_ENV] || '').trim();
-  return single && single.length <= GOOGLE_KEY_MAX ? [single] : [];
+  return single && single.length <= GOOGLE_KEY_MAX ? [{ key: single, name: '' }] : [];
 }
 
-/** Every key, held or not, in configured order. */
-export function poolKeys(): string[] {
+/** Every entry, named or not, in configured order. */
+export function poolEntries(): PoolEntry[] {
   const now = Date.now();
-  if (poolCache && now - poolCache.at < POOL_CACHE_MS) return poolCache.keys;
-  const keys = configuredKeys();
-  poolCache = { keys, at: now };
-  return keys;
+  if (poolCache && now - poolCache.at < POOL_CACHE_MS) return poolCache.entries;
+  const entries = configuredEntries();
+  poolCache = { entries, at: now };
+  return entries;
+}
+
+/** Just the keys, in order. The hot path (currentKey) needs nothing else, and
+ *  every caller that REWRITES the pool must use poolEntries/serializePool so a
+ *  label can't be dropped by a reorder or a removal. */
+export function poolKeys(): string[] {
+  return poolEntries().map(e => e.key);
 }
 
 /** Drop the memo. The settings save path calls this after writing a new pool so
@@ -169,6 +221,8 @@ export function reportKeySuccess(key: string): void {
 export interface PoolStatus {
   index: number;
   fingerprint: string;
+  /** Operator's label, or '' when unnamed. */
+  name: string;
   held: boolean;
   holdRemainingMs: number;
   reason: Hold['reason'] | null;
@@ -178,7 +232,7 @@ export interface PoolStatus {
 export function poolStatus(): PoolStatus[] {
   const now = Date.now();
   const current = currentKey();
-  return poolKeys().map((key, index) => {
+  return poolEntries().map(({ key, name }, index) => {
     const hold = holds.get(key);
     const remaining = hold ? hold.until - now : 0;
     const live = remaining > 0;
@@ -186,6 +240,7 @@ export function poolStatus(): PoolStatus[] {
     return {
       index,
       fingerprint: fingerprint(key),
+      name,
       held: live,
       holdRemainingMs: live ? remaining : 0,
       reason: live ? hold!.reason : null,

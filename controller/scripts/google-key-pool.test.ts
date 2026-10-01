@@ -29,6 +29,8 @@ import {
   holdRemainingMs,
   invalidatePool,
   parsePool,
+  sanitizeName,
+  serializePool,
   poolKeys,
   poolSize,
   poolStatus,
@@ -163,10 +165,74 @@ test('no hint parks on the hours scale, randomised', () => {
 // ─── pool parsing ───────────────────────────────────────────────────────────
 
 test('the pool splits on commas, trims, dedupes and bounds', () => {
-  assert.deepEqual(parsePool(`${K1}, ${K2} ,${K1}`), [K1, K2]);
+  assert.deepEqual(parsePool(`${K1}, ${K2} ,${K1}`), [
+    { key: K1, name: '' }, { key: K2, name: '' },
+  ]);
   assert.deepEqual(parsePool(''), []);
   assert.deepEqual(parsePool(null), []);
   assert.equal(parsePool(Array.from({ length: 80 }, (_, i) => `k${i}`).join(',')).length, 50);
+});
+
+// ─── naming ─────────────────────────────────────────────────────────────────
+// A label lives INLINE with its key (`key:name`) rather than in a parallel
+// array indexed by position — the shape that silently reattaches labels to the
+// wrong credentials the first time a key is moved or removed.
+
+test('a label rides with its key, and a name may contain colons', () => {
+  assert.deepEqual(parsePool(`${K1}:Free tier 1,${K2}:Paid`), [
+    { key: K1, name: 'Free tier 1' },
+    { key: K2, name: 'Paid' },
+  ]);
+  // Split on the FIRST colon only: a Google key cannot contain one, so
+  // everything after it is the operator's name, colons included.
+  assert.deepEqual(parsePool(`${K1}:House: guest mic`), [
+    { key: K1, name: 'House: guest mic' },
+  ]);
+});
+
+test('a comma inside a name is stripped at the WRITE boundary, not at parse', () => {
+  // `key:name` is comma-separated, so a name containing a comma would split the
+  // entry in two and the tail would be sent to Google as a phantom key. The
+  // only writers are the add and rename endpoints, and both sanitise first —
+  // parsePool is documented as expecting already-sanitised input.
+  assert.equal(sanitizeName('Free, one, two'), 'Free one two');
+  assert.equal(sanitizeName('line\nbreak'), 'line break');
+  assert.equal(sanitizeName('  padded  '), 'padded');
+  assert.equal(sanitizeName('x'.repeat(200)).length, 60, 'names are length-capped');
+  // Nothing sanitised can ever reach the parser as a split.
+  assert.equal(serializePool([{ key: K1, name: 'Free, one, two' }]).split(',').length, 1);
+});
+
+test('names survive a full parse/serialise round trip', () => {
+  const entries = [{ key: K1, name: 'Free tier 1' }, { key: K2, name: 'Paid' }];
+  assert.deepEqual(parsePool(serializePool(entries)), entries);
+});
+
+test('an unnamed pool still serialises as a plain list of keys', () => {
+  // A pool nobody has labelled must stay readable and hand-editable — no
+  // trailing colons, no `::`.
+  assert.equal(serializePool([{ key: K1, name: '' }, { key: K2, name: '' }]), `${K1},${K2}`);
+});
+
+test('reorder and remove preserve labels, because they serialise from entries', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../src/routes/settings/core.ts', import.meta.url), 'utf8');
+  // The bug this guards: a move that rebuilt the pool from bare keys would
+  // strip every label the operator just typed.
+  assert.doesNotMatch(src, /saveSecrets\(\{ \[GOOGLE_KEYS_ENV\]: next\.join\(','\) \}\)/);
+  const moves = (src.match(/serializePool\(/g) || []).length;
+  assert.ok(moves >= 3, `move/remove/rename must all serialise from entries, saw ${moves}`);
+});
+
+test('pool status reports the name and still leaks no key material', () => {
+  setPool();
+  process.env.GOOGLE_GENERATIVE_AI_API_KEYS = `${K1}:Free tier 1,${K2}:Paid`;
+  invalidatePool();
+  __resetHoldsForTest();
+  const status = poolStatus();
+  assert.deepEqual(status.map(s => s.name), ['Free tier 1', 'Paid']);
+  const serialised = JSON.stringify(status);
+  assert.ok(!serialised.includes(K1) && !serialised.includes(K2), 'a raw key leaked into pool status');
 });
 
 test('a single legacy key is a one-key pool, so nothing changes for those stations', () => {
@@ -355,9 +421,9 @@ test('the move endpoint validates both bounds and rewrites the whole list', asyn
   // Both bounds are checked against a FRESH read of the pool, so a stale index
   // from a concurrent add is a 400 rather than the wrong key moving.
   assert.match(body, /!Number\.isInteger\(from\) \|\| !Number\.isInteger\(to\)/);
-  assert.match(body, /from < 0 \|\| from >= keys\.length \|\| to < 0 \|\| to >= keys\.length/);
-  // And it persists the whole reordered list, not just the moved entry.
-  assert.match(body, /saveSecrets\(\{ \[GOOGLE_KEYS_ENV\]: next\.join\(','\) \}\)/);
+  assert.match(body, /from < 0 \|\| from >= entries\.length \|\| to < 0 \|\| to >= entries\.length/);
+  // And it persists the whole reordered list, from ENTRIES so labels survive.
+  assert.match(body, /serializePool\(next\)/);
   assert.match(body, /invalidatePool\(\)/);
 });
 

@@ -57,16 +57,28 @@ Each entry shows:
 | `held ~5s · rate limit` | Briefly throttled; back in seconds |
 
 Keys are identified by a short fingerprint (`••••bhzQ`) so you can tell them
-apart. **The station never sends a key value back to the browser** — not to the
-admin UI, not to `/settings` — so you can't copy one out of the page, and a
-saved pool can't leak through a screenshot of the API response.
+apart, and you can give each one a **name** — "Free 1", "Free 2", "Paid" — so
+the list reads the way you think about it. Names save when you click away from
+the field.
+
+**The station never sends a key value back to the browser** — not to the admin
+UI, not to `/settings` — so you can't copy one out of the page, and a saved pool
+can't leak through a screenshot of the API response. Names travel; keys don't.
 
 Keys are stored in `state/secrets.env` as a comma-separated list and take effect
 immediately, with no controller restart:
 
 ```bash
-GOOGLE_GENERATIVE_AI_API_KEYS="AIza...free1,AIza...free2,AIza...paid"
+# key:name pairs — the name is optional, so a bare list is still valid
+GOOGLE_GENERATIVE_AI_API_KEYS="AIza...free1:Free 1,AIza...free2:Free 2,AIza...paid:Paid"
 ```
+
+The name lives **inside** the same variable as its key rather than in a separate
+list, because a separate list of names indexed against a list of keys is the
+shape that silently reattaches labels to the wrong credentials the first time a
+key is moved or removed. A Google key can't contain a colon, so the first colon
+is the split point and a name may contain colons of its own. Commas are stripped
+from names when they save, since they separate entries.
 
 The single `GOOGLE_GENERATIVE_AI_API_KEY` still works and is read as a one-key
 pool, so a station that never touches this feature behaves identically to before.
