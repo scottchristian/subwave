@@ -20,11 +20,13 @@ export interface WizardData {
   llmTest: { ok: boolean | null; msg?: string };
 
   tts: {
-    defaultEngine: 'piper' | 'kokoro' | 'cloud' | 'chatterbox' | 'pocket-tts' | 'remote';
+    defaultEngine: 'piper' | 'kokoro' | 'cloud' | 'chatterbox' | 'pocket-tts' | 'remote' | 'gemini';
     // Advisory only: the web wizard can't start the tts-heavy sidecar, so this
     // records intent (settings.tts.heavyEnabled) and shows the docker commands.
     heavyEnabled: boolean;
     cloud: { enabled: boolean; provider: string; apiKey: string; model: string; voice: string };
+    // Google key for the gemini engine, collected only when it is selected.
+    geminiApiKey: string;
   };
 
   dj: {
@@ -61,6 +63,7 @@ export const DEFAULT_DATA: WizardData = {
     defaultEngine: 'piper',
     heavyEnabled: false,
     cloud: { enabled: false, provider: 'openai', apiKey: '', model: 's2.1-pro', voice: '' },
+    geminiApiKey: '',
   },
   dj: {
     stationName: 'SUB/WAVE',
@@ -194,6 +197,12 @@ export function useWizard() {
         data.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' :
         data.tts.cloud.provider === 'fish-audio' ? 'FISH_API_KEY' : '';
       if (k) apiKeys[k] = data.tts.cloud.apiKey;
+    }
+    // The gemini engine calls Google directly and reads the same key the google
+    // LLM provider uses. Without this, offering the engine in the dropdown
+    // below saves a station that silently falls back to Piper.
+    if (data.tts.defaultEngine === 'gemini' && data.tts.geminiApiKey) {
+      apiKeys['GOOGLE_GENERATIVE_AI_API_KEY'] = data.tts.geminiApiKey;
     }
     // The key may come from the root environment, so fishAudioIssue judges only
     // the fields the wizard must persist. Same helper the controller's save runs.

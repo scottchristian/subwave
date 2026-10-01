@@ -2257,6 +2257,11 @@ class Queue {
     }
     const rendered: { persona: Persona; text: string; wavPath: string }[] = [];
     try {
+      // One render per line, so every line keeps its OWN gain, its own session
+      // turn, its own speaker attribution and its own live-edge stamp. A single
+      // batched render would collapse N lines into one segment, which loses the
+      // per-speaker attribution this path exists to preserve and would settle a
+      // `handoff` exchange on a boundary it is supposed to hold for.
       for (const l of lines) {
         const text = normalizeForDisplay(l.text || '');
         if (!text) continue;

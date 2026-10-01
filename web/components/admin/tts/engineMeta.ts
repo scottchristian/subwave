@@ -16,6 +16,7 @@ export const ENGINES: EngineMeta[] = [
   { id: 'pocket-tts', label: 'PocketTTS',  blurb: 'Multilingual · CPU-only' },
   { id: 'cloud',      label: 'Cloud',      blurb: 'OpenAI · ElevenLabs · Fish' },
   { id: 'remote',     label: 'Remote',     blurb: 'Self-hosted HTTP endpoint' },
+  { id: 'gemini',     label: 'Gemini',     blurb: 'Google TTS direct · needs API key' },
 ];
 
 // The persona-only "follow the station" card, offered first. Kept out of
@@ -146,6 +147,13 @@ export function engineStatus(
         ? {
             label: 'unreachable', tone: 'warn', state: 'off',
             hint: { reason: 'The remote TTS endpoint is unreachable', action: 'check its URL and service status in Settings → Voice' },
+          }
+        : { label: 'ready', tone: 'ok', state: 'ready' };
+    case 'gemini':
+      return a.gemini === false
+        ? {
+            label: 'no key', tone: 'warn', state: 'off',
+            hint: { reason: 'No Google API key is configured', action: 'add GOOGLE_GENERATIVE_AI_API_KEY to state/secrets.env and restart the controller' },
           }
         : { label: 'ready', tone: 'ok', state: 'ready' };
     default:
