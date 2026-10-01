@@ -21,8 +21,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { notify } from '@/lib/notify';
 
-const POOL_ENV = 'GOOGLE_GENERATIVE_AI_API_KEYS';
-
 export interface GooglePoolKey {
   index: number;
   fingerprint: string;
@@ -55,6 +53,7 @@ export function GoogleKeyPoolEditor({
   onChanged?: () => void;
 }) {
   const [adding, setAdding] = useState('');
+  const [addingName, setAddingName] = useState('');
   const [busy, setBusy] = useState(false);
   // The full pool is only ever known to the server, so a removal has to be sent
   // as a replacement of the whole list — which needs the values we deliberately
@@ -89,13 +88,16 @@ export function GoogleKeyPoolEditor({
   const addKey = useCallback(async () => {
     const key = adding.trim();
     if (!key) return;
-    const ok = await post('/settings/secrets', { [POOL_ENV]: key });
+    // Its own endpoint, NOT /settings/secrets: that writer REPLACES the value,
+    // and the client cannot build the new list because it is never sent the key
+    // values. Posting the new key there replaced the whole pool every time.
+    const ok = await post('/settings/google-key-pool/add', { key, name: addingName });
     if (ok) {
       setAdding('');
-      notify.ok('Key added to the pool');
+      setAddingName('');
       onChanged?.();
     }
-  }, [adding, post, onChanged]);
+  }, [adding, addingName, post, onChanged]);
 
   const removeKey = useCallback(async (index: number) => {
     const ok = await post('/settings/google-key-pool/remove', { index });
@@ -229,8 +231,21 @@ export function GoogleKeyPoolEditor({
           onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void addKey(); } }}
           className="max-w-[360px]"
         />
+        <Input
+          value={addingName}
+          placeholder="Name (optional)"
+          aria-label="Name for the new key"
+          maxLength={60}
+          onChange={e => setAddingName(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void addKey(); } }}
+          className="max-w-[200px]"
+        />
         <Btn onClick={addKey} disabled={busy || !adding.trim()}>Add key</Btn>
       </div>
+      <p className="mt-1 text-[12px] text-muted">
+        Adding a key keeps the ones already here, and appends it to the end —
+        move it with ↑ ↓ if it belongs earlier.
+      </p>
       <p className="mt-1 text-[12px] text-muted">
         Keys are tried in the order you add them — use ↑ ↓ to change that order.
         When one hits a quota limit it is set aside for as long as Google asks

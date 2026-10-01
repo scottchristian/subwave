@@ -31,6 +31,7 @@ import {
   parsePool,
   sanitizeName,
   serializePool,
+  poolEntries,
   poolKeys,
   poolSize,
   poolStatus,
@@ -425,6 +426,52 @@ test('the move endpoint validates both bounds and rewrites the whole list', asyn
   // And it persists the whole reordered list, from ENTRIES so labels survive.
   assert.match(body, /serializePool\(next\)/);
   assert.match(body, /invalidatePool\(\)/);
+});
+
+// ─── adding ─────────────────────────────────────────────────────────────────
+// The bug this pins: the add button originally POSTed the new key to the
+// generic `/settings/secrets`, which REPLACES the value it is handed. Every add
+// therefore overwrote the pool and left the operator with whichever key they
+// typed last. The client cannot build the replacement list itself — it is never
+// sent the key values — so appending has to happen server-side.
+
+test('appending a key preserves every key already in the pool', () => {
+  setPool(K1, K2);
+  const entries = poolEntries().map(e => ({ ...e }));
+  entries.push({ key: K3, name: 'Paid' });
+  assert.deepEqual(entries.map(e => e.key), [K1, K2, K3]);
+  // And the write is the WHOLE pool, not the new key alone.
+  assert.deepEqual(parsePool(serializePool(entries)).map(e => e.key), [K1, K2, K3]);
+});
+
+test('the first add keeps a legacy single key as entry 0 rather than orphaning it', () => {
+  // poolEntries() falls back to GOOGLE_GENERATIVE_AI_API_KEY when no pool is
+  // set. An add that ignored that would silently drop the key already working.
+  delete process.env.GOOGLE_GENERATIVE_AI_API_KEYS;
+  process.env.GOOGLE_GENERATIVE_AI_API_KEY = K1;
+  invalidatePool();
+  __resetHoldsForTest();
+  const entries = poolEntries().map(e => ({ ...e }));
+  assert.deepEqual(entries.map(e => e.key), [K1], 'the legacy key is the seed');
+  entries.push({ key: K2, name: '' });
+  assert.deepEqual(entries.map(e => e.key), [K1, K2]);
+});
+
+test('the add endpoint appends from entries and refuses a duplicate', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../src/routes/settings/core.ts', import.meta.url), 'utf8');
+  const start = src.indexOf("router.post('/settings/google-key-pool/add'");
+  assert.ok(start > 0, 'the add endpoint is missing');
+  const body = src.slice(start, src.indexOf('\n});', start));
+  // Reads the current pool and pushes onto it — a replace-the-value writer is
+  // exactly the bug this endpoint exists to route around.
+  assert.match(body, /const entries = poolEntries\(\)\.map/);
+  assert.match(body, /entries\.push\(\{ key: trimmed, name: sanitizeName/);
+  assert.match(body, /serializePool\(entries\)/);
+  // A duplicate is refused rather than appended: parsePool dedupes on read, so
+  // a stored duplicate would show as a phantom slot that silently does nothing.
+  assert.match(body, /already in the pool/);
+  assert.match(body, /entries\.length >= GOOGLE_POOL_MAX/);
 });
 
 test('with no pool configured the transport is exactly the SDK transport', async () => {

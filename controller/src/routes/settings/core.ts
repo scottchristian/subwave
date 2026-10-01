@@ -26,8 +26,10 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { generateText } from 'ai';
 import { briefLlmError } from './llm.js';
 import {
+  GOOGLE_KEY_MAX,
   GOOGLE_KEYS_ENV,
   GOOGLE_KEY_ENV,
+  GOOGLE_POOL_MAX,
   poolEntries,
   poolKeys,
   sanitizeName,
@@ -321,6 +323,47 @@ router.post('/settings/google-key-pool/remove', requireAdmin, async (req, res) =
   } catch (err) {
     console.error('[settings/google-key-pool/remove]', err);
     res.status(500).json({ error: 'Failed to update the key pool' });
+  }
+});
+
+// Add a key. Its OWN endpoint because the generic `/settings/secrets` writer
+// REPLACES the value it is given, and the client cannot construct the new
+// list — it is never sent the key values, by design. Sending only the new key
+// through that route therefore replaced the whole pool on every add, leaving
+// the operator with whichever key they typed last.
+//
+// Two things it has to get right beyond appending:
+//   • a legacy single GOOGLE_GENERATIVE_AI_API_KEY seeds the pool as the FIRST
+//     entry, so adding a key never silently drops the one already working;
+//   • a duplicate is refused rather than added, since parsePool dedupes on
+//     read and the UI would otherwise show a phantom slot.
+router.post('/settings/google-key-pool/add', requireAdmin, async (req, res) => {
+  const { key, name } = (req.body || {});
+  const trimmed = String(key ?? '').trim();
+  if (!trimmed) return res.status(400).json({ error: 'key is required' });
+  if (trimmed.length > GOOGLE_KEY_MAX) {
+    return res.status(400).json({ error: `key must be at most ${GOOGLE_KEY_MAX} characters` });
+  }
+  if (name != null && typeof name !== 'string') {
+    return res.status(400).json({ error: 'name must be a string' });
+  }
+  const entries = poolEntries().map(e => ({ ...e }));
+  if (entries.some(e => e.key === trimmed)) {
+    return res.status(409).json({ error: 'that key is already in the pool' });
+  }
+  if (entries.length >= GOOGLE_POOL_MAX) {
+    return res.status(400).json({ error: `the pool is capped at ${GOOGLE_POOL_MAX} keys` });
+  }
+  // poolEntries() falls back to the legacy single key, so the first add keeps
+  // it as entry 0 rather than orphaning it.
+  entries.push({ key: trimmed, name: sanitizeName(name ?? '') });
+  try {
+    await saveSecrets({ [GOOGLE_KEYS_ENV]: serializePool(entries) });
+    invalidatePool();
+    res.json({ ok: true, count: entries.length });
+  } catch (err) {
+    console.error('[settings/google-key-pool/add]', err);
+    res.status(500).json({ error: 'Failed to add the key' });
   }
 });
 
