@@ -143,12 +143,21 @@ export function GoogleKeyPoolEditor({
         </p>
       ) : (
         <>
-          <ul className="mt-2 flex flex-col gap-2">
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] font-bold tracking-[0.16em] text-muted uppercase">
+            {/* Column headings, so the row below isn't four unlabelled things.
+                Widths match the row exactly — they drift apart the moment a
+                label is longer than the column. */}
+            <span className="min-w-[140px]">Name</span>
+            <span className="min-w-[80px]">Key reference</span>
+            <span className="min-w-[150px]">Status</span>
+            <span className="ml-auto">Actions</span>
+          </div>
+          <ul className="mt-1 flex flex-col gap-2">
             {keys.map(k => (
               <li key={`${k.index}-${k.fingerprint}`} className="flex flex-wrap items-center gap-2 text-[12px]">
                 <input
                   defaultValue={k.name}
-                  placeholder={k.fingerprint}
+                  placeholder="e.g. Free 1"
                   aria-label={`Name for key ${k.index + 1}`}
                   maxLength={60}
                   // defaultValue + blur, not controlled: a per-keystroke save
@@ -161,7 +170,7 @@ export function GoogleKeyPoolEditor({
                   className="min-w-[140px] border border-input bg-field px-2 py-1 text-[12px] text-foreground placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
                 />
                 <code className="min-w-[80px] text-muted">{k.fingerprint}</code>
-                <span className="text-muted">
+                <span className="min-w-[150px] text-muted">
                   {k.current ? 'in use' : 'standby'}
                   {k.held ? ` · ${holdLabel(k)}` : ''}
                 </span>
