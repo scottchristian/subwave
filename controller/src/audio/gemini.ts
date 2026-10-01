@@ -5,8 +5,10 @@
 // speech_metadata.style. The transcript is NEVER prefixed with [...] blocks —
 // 3.8 treats input as verbatim and lite vocalizes them (rambling/static tail).
 //
-// Key: GOOGLE_GENERATIVE_AI_API_KEY (state/secrets.env → process.env).
-// Never the 9router key — Google rejects it with API_KEY_INVALID.
+// Key: GOOGLE_GENERATIVE_AI_API_KEY (state/secrets.env → process.env), or the
+// Google key pool when one is configured. A key minted for a proxy/gateway
+// account is rejected by Google itself with API_KEY_INVALID, so the credential
+// must be Google's own.
 //
 // Cue translation (splitCues) ports the sidecar's split_cues; the two must
 // stay in sync — scripts/gemini-tts.test.ts pins this copy's vectors, and any
