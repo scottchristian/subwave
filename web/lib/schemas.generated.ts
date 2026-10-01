@@ -4467,6 +4467,7 @@ export const SKILL_VOICE_ENGINES = [
   'pocket-tts',
   'cloud',
   'remote',
+  'gemini',
 ] as const;
 
 export const SKILL_VOICE_PROVIDERS = [
