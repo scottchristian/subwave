@@ -275,6 +275,7 @@ const skillCohostsSchema = z.preprocess(
 <<<<<<< HEAD
 =======
 //
+<<<<<<< HEAD
 // ── MERGE NOTE: this list and PR #1718 (gemini TTS) must land together ─────
 // The gemini-TTS PR adds 'gemini' to persona TTS_ENGINES. The pin above makes
 // this list EQUAL to that one, so exactly one merge order is red:
@@ -304,6 +305,14 @@ const skillCohostsSchema = z.preprocess(
 >>>>>>> 9ddfb986 (feat(skills): per-skill TTS voice override)
 =======
 // than a subset check.
+=======
+// Why the two lists must match at all: a skill pins the SAME engine vocabulary
+// a persona does, so a skill must never become the one surface where a valid,
+// working engine is unreachable. That is why the pin is a deepEqual rather
+// than a subset check. ADDING AN ENGINE means adding it HERE in the same change —
+// the pin in scripts/skill-voice.test.ts is what makes the omission fail loudly
+// rather than quietly leaving one surface behind.
+>>>>>>> b676ee31 (docs(skills): make the voice override self-contained, and correct the CLAUDE.md note)
 // ─────────────────────────────────────────────────────────────────────────
 >>>>>>> 4ce9b57b (docs(skills): restore the merge-order note on the engine list)
 export const SKILL_VOICE_ENGINES = [
@@ -316,6 +325,7 @@ export const SKILL_VOICE_ENGINES = [
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
   'gemini',
 =======
 >>>>>>> 9ddfb986 (feat(skills): per-skill TTS voice override)
@@ -325,6 +335,8 @@ export const SKILL_VOICE_ENGINES = [
 =======
   // 'gemini',  // ← uncomment when landing the gemini-TTS PR (#1718); see above
 >>>>>>> 4ce9b57b (docs(skills): restore the merge-order note on the engine list)
+=======
+>>>>>>> b676ee31 (docs(skills): make the voice override self-contained, and correct the CLAUDE.md note)
 ] as const;
 
 export const SKILL_VOICE_PROVIDERS = [
