@@ -417,6 +417,7 @@ const ttsStepSchema = z.object({
     model: z.string(),
     voice: z.string(),
   }),
+  geminiApiKey: z.string(),
 });
 
 const TTS_ENGINE_OPTIONS = [
@@ -426,6 +427,7 @@ const TTS_ENGINE_OPTIONS = [
   { value: 'chatterbox', label: 'Chatterbox (voice cloning, sidecar)' },
   { value: 'pocket-tts', label: 'PocketTTS (multilingual, sidecar)' },
   { value: 'remote', label: 'Remote (your own server)' },
+  { value: 'gemini', label: 'Gemini (Google direct, needs API key)' },
 ];
 
 // Only the three cloud providers the wizard collects credentials for.
@@ -495,6 +497,23 @@ export function TtsStep({ w }: { w: WizardController }) {
             optional <code>tts-heavy</code> sidecar but you haven&apos;t enabled
             it above — this persona will silently fall back to Piper until the
             sidecar is started.
+          </V3Alert>
+        )}
+        {engine === 'gemini' && (
+          <TextField
+            control={form.control}
+            name="geminiApiKey"
+            label="Google API key"
+            type="password"
+            autoComplete="off"
+            placeholder="Paste a Google AI Studio key"
+          />
+        )}
+        {engine === 'gemini' && !form.watch('geminiApiKey')?.trim() && (
+          <V3Alert tone="error" title="Heads up">
+            Gemini calls Google directly and needs a key — without one it
+            silently falls back to Piper until a key is saved in Admin →
+            Settings → Voice.
           </V3Alert>
         )}
         <SwitchField

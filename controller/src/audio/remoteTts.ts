@@ -83,7 +83,7 @@ export function isAvailable(): boolean {
 
 export async function speak(
   text: string,
-  { outPath: customPath, voice, speedScale }: { outPath?: string; voice?: string; speedScale?: number } = {},
+  { outPath: customPath, voice, speedScale, style }: { outPath?: string; voice?: string; speedScale?: number; style?: string } = {},
 ): Promise<string> {
   const url = getUrl();
   if (!url) throw new Error('remote TTS URL not configured');
@@ -92,11 +92,22 @@ export async function speak(
   const outPath = customPath || path.join(config.piper.outDir, `${crypto.randomBytes(6).toString('hex')}.wav`);
   await mkdir(path.dirname(outPath), { recursive: true });
 
+  // Two independent additions to the SAME request body, so they are merged
+  // rather than one replacing the other: this station's sidecar also takes
+  // `geminiSafety`, and the persona's delivery directive (accent, pace, energy)
+  // rides as `style`. An empty style is omitted so the endpoint falls back to
+  // its built-in style for that voice.
   const geminiSafety = settings.get().llm.geminiSafety;
+  const voiceStyle = typeof style === 'string' ? style.trim().slice(0, 300) : '';
   const res = await fetchWithTimeout(`${url}/speak`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text: text.trim(), voice: voice ?? '', geminiSafety }),
+    body: JSON.stringify({
+      text: text.trim(),
+      voice: voice ?? '',
+      geminiSafety,
+      ...(voiceStyle ? { style: voiceStyle } : {}),
+    }),
     timeoutMs: REQUEST_TIMEOUT_MS,
   });
   if (!res.ok) {

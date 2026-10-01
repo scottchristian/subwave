@@ -439,6 +439,15 @@ export function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown
   if (l.repeatPenalty !== undefined) {
     target.repeatPenalty = clampRepeatPenalty(Number(l.repeatPenalty), target.repeatPenalty as number);
   }
+  // HARM_CATEGORY thresholds for the native `google` leg. Whole-object
+  // REPLACE (not a merge) so clearing a box in the editor actually clears it;
+  // each box is strictly boolean, anything else reads as allow.
+  if (l.geminiSafety !== undefined) {
+    if (!l.geminiSafety || typeof l.geminiSafety !== 'object' || Array.isArray(l.geminiSafety)) {
+      throw new Error(`${label}.geminiSafety must be an object map of category → boolean`);
+    }
+    target.geminiSafety = normalizeGeminiSafety(l.geminiSafety);
+  }
   // Discovery-round budget. 0 = follow the provider capability table.
   if (l.discoverySteps !== undefined) {
     target.discoverySteps = clampDiscoverySteps(Number(l.discoverySteps), target.discoverySteps as number);
@@ -457,6 +466,24 @@ export function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown
   const urls = (target.providerBaseUrls as Record<string, string> | undefined) ?? {};
   const prov = target.provider as string | undefined;
   target.baseUrl = (prov && urls[prov]) ? urls[prov] : '';
+  // Per-task model overrides ({ [kind]: model }). Whole-map REPLACE (not a
+  // merge) so clearing a task in the editor actually clears it. Keys are task
+  // kinds the callers pass to primaryLeg(); values are trimmed model ids,
+  // each 0-100 chars like `model`; an empty value drops the entry (blank =
+  // "use the primary model").
+  if (l.modelOverrides !== undefined) {
+    if (!l.modelOverrides || typeof l.modelOverrides !== 'object' || Array.isArray(l.modelOverrides)) {
+      throw new Error(`${label}.modelOverrides must be an object map of task → model`);
+    }
+    const next: Record<string, string> = {};
+    for (const [k, v] of Object.entries(l.modelOverrides as Record<string, unknown>)) {
+      if (typeof k !== 'string' || !k) continue;
+      const model = String(v ?? '').trim();
+      if (model.length > 100) throw new Error(`${label}.modelOverrides.${k} must be 0-100 chars`);
+      if (model) next[k] = model;
+    }
+    target.modelOverrides = next;
+  }
 }
 
 // Route an inline API key into `llmHost.keys[provider]` (#657) using the leg's
@@ -486,6 +513,24 @@ export function normalizeLlmHeaders(raw: unknown): Record<string, string> {
     out[name] = v;
   }
   return out;
+}
+
+// HARM_CATEGORY thresholds for the native `google` leg. Lenient load posture
+// like the rest of this file: booleans only, anything else reads as allow
+// (unchecked), so a hand-edited settings.json can't wedge boot.
+export function normalizeGeminiSafety(raw: unknown): {
+  harassment: boolean;
+  hateSpeech: boolean;
+  sexuallyExplicit: boolean;
+  dangerousContent: boolean;
+} {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    harassment: r.harassment === true,
+    hateSpeech: r.hateSpeech === true,
+    sexuallyExplicit: r.sexuallyExplicit === true,
+    dangerousContent: r.dangerousContent === true,
+  };
 }
 
 // Build the per-provider inline-key map from a stored settings.llm blob and

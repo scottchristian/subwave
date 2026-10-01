@@ -3,7 +3,7 @@ import type { Control } from 'react-hook-form';
 import { useController } from 'react-hook-form';
 import type { Persona, PersonasFormValues } from './types';
 import type { AdminAuth } from '../../../lib/adminAuth';
-import { NAME_MAX, TAGLINE_MAX, SOUL_MAX, LANGUAGE_MAX, TAGS_MAX, TAG_MAX, TAG_RE } from './constants';
+import { NAME_MAX, TAGLINE_MAX, SOUL_MAX, VOICE_STYLE_MAX, LANGUAGE_MAX, TAGS_MAX, TAG_MAX, TAG_RE } from './constants';
 import { Card } from '../ui';
 import { TagField } from '../TagField';
 import { Label } from '../../ui/label';
@@ -37,6 +37,7 @@ export function PersonaIdentityCard({
   onUpdate, onPickAvatar, onGenerateAvatar, onClearAvatar,
 }: PersonaIdentityCardProps) {
   const soulLen = persona.soul.trim().length;
+  const voiceStyleLen = (persona.voiceStyle || '').trim().length;
   const tagsCtl = useController({ control, name: `personas.${index}.tags` });
   return (
     <Card flat title="Identity">
@@ -145,6 +146,20 @@ export function PersonaIdentityCard({
           <div className="field-hint">
             One short personality sketch. Injected into the prompt as <code>{'{soul}'}</code>.
             <span className="ml-2 text-muted">{soulLen} / {SOUL_MAX}</span>
+          </div>
+          <TextareaField
+            control={control}
+            name={`personas.${index}.voiceStyle`}
+            label="Voice style"
+            rows={3}
+            maxLength={VOICE_STYLE_MAX}
+            placeholder="e.g. broad Australian accent, high-energy and upbeat"
+          />
+          <div className="field-hint">
+            Delivery directive for the TTS voice — accent, pace, energy. Empty means
+            the voice&apos;s built-in style. Unlike soul, this never reaches the
+            writing prompt; it only shapes how the line sounds.
+            <span className="ml-2 text-muted">{voiceStyleLen} / {VOICE_STYLE_MAX}</span>
           </div>
         </div>
       </div>

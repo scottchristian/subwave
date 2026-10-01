@@ -64,7 +64,51 @@ export const ENGINE_UNAVAILABLE: Record<string, ReactNode> = {
       Settings &rarr; Voice.
     </>
   ),
+  gemini: (
+    <>
+      No Google API key is configured. Add <code>GOOGLE_GENERATIVE_AI_API_KEY</code> to{' '}
+      <code>state/secrets.env</code> and restart the controller.
+    </>
+  ),
 };
+
+// Curated prebuilt Gemini voice ids (Google docs). Anything not listed is
+// typed into the custom box in the picker below.
+const GEMINI_PREBUILT_VOICES: { id: string; label: string }[] = [
+  { id: 'Zephyr', label: 'Zephyr — Bright' },
+  { id: 'Puck', label: 'Puck — Upbeat' },
+  { id: 'Charon', label: 'Charon — Informative' },
+  { id: 'Kore', label: 'Kore — Firm' },
+  { id: 'Fenrir', label: 'Fenrir — Excitable' },
+  { id: 'Leda', label: 'Leda — Youthful' },
+  { id: 'Orus', label: 'Orus — Firm' },
+  { id: 'Aoede', label: 'Aoede — Breezy' },
+  { id: 'Callirrhoe', label: 'Callirrhoe — Easy-going' },
+  { id: 'Autonoe', label: 'Autonoe — Bright' },
+  { id: 'Enceladus', label: 'Enceladus — Breathy' },
+  { id: 'Iapetus', label: 'Iapetus — Clear' },
+  { id: 'Umbriel', label: 'Umbriel — Easy-going' },
+  { id: 'Algieba', label: 'Algieba — Smooth' },
+  { id: 'Despina', label: 'Despina — Smooth' },
+  { id: 'Erinome', label: 'Erinome — Clear' },
+  { id: 'Algenib', label: 'Algenib — Gravelly' },
+  { id: 'Rasalgethi', label: 'Rasalgethi — Informative' },
+  { id: 'Laomedeia', label: 'Laomedeia — Upbeat' },
+  { id: 'Achernar', label: 'Achernar — Soft' },
+  { id: 'Alnilam', label: 'Alnilam — Firm' },
+  { id: 'Schedar', label: 'Schedar — Even' },
+  { id: 'Gacrux', label: 'Gacrux — Mature' },
+  { id: 'Pulcherrima', label: 'Pulcherrima — Forward' },
+  { id: 'Achird', label: 'Achird — Friendly' },
+  { id: 'Zubenelgenubi', label: 'Zubenelgenubi — Casual' },
+  { id: 'Vindemiatrix', label: 'Vindemiatrix — Gentle' },
+  { id: 'Sadachbia', label: 'Sadachbia — Lively' },
+  { id: 'Sadaltager', label: 'Sadaltager — Knowledgeable' },
+  { id: 'Sulafat', label: 'Sulafat — Warm' },
+];
+
+// Curated prebuilt Gemini voice ids (Google docs). Anything not listed is
+// typed into the custom box in the picker below.
 
 // The slice of GET /settings this component reads. Structural on purpose: the
 // Personas and Settings pages model the rest of that payload differently.
@@ -97,6 +141,9 @@ interface EngineVoiceFieldsProps {
   cloudIssue?: ReactNode;
   engineHint?: ReactNode;
   previewHint?: ReactNode;
+  // Delivery directive the sample button auditions (persona voiceStyle).
+  // Only the remote engine reads it.
+  previewStyle?: string;
   // Personas only: offer "Station default" (the 'inherit' engine). The station
   // rescue slot must not — 'inherit' there names the rung below it in the
   // chain. When set, the caller also supplies the note shown while it is picked.
@@ -112,7 +159,7 @@ interface EngineVoiceFieldsProps {
 
 export function EngineVoiceFields({
   value, onChange, data, adminFetch,
-  previewSpeed, previewLanguage,
+  previewSpeed, previewLanguage, previewStyle,
   unavailableNote, cloudIssue, engineHint, previewHint,
   allowInherit = false, inheritNote, inheritResolvesTo,
 }: EngineVoiceFieldsProps) {
@@ -412,6 +459,42 @@ export function EngineVoiceFields({
         );
       })()}
 
+      {voiceEngine === 'gemini' && (() => {
+        const geminiAvail = data?.tts?.available?.gemini;
+        const cur = value.voice.trim();
+        const listed = GEMINI_PREBUILT_VOICES.some(v => v.id.toLowerCase() === cur.toLowerCase());
+        return (
+          <div className="field max-w-[360px]">
+            {geminiAvail === false && notice('gemini')}
+            <Label>Gemini voice</Label>
+            <VoicePicker
+              value={cur && listed ? GEMINI_PREBUILT_VOICES.find(v => v.id.toLowerCase() === cur.toLowerCase())!.id : (cur || 'Puck')}
+              onChange={val => onChange({ voice: val })}
+              groups={[{
+                voices: [
+                  ...GEMINI_PREBUILT_VOICES,
+                  ...(!cur || listed ? [] : [{ id: cur, label: `${cur} (custom)`, hint: 'custom' }]),
+                ],
+              }]}
+              title="Gemini voice"
+              preview={{ engine: 'gemini', speed: previewSpeed, language: previewLanguage, style: previewStyle, adminFetch }}
+            />
+            <Input
+              aria-label="Custom Gemini voice id"
+              className="mt-2"
+              value={listed ? '' : cur}
+              maxLength={100}
+              placeholder="Custom voice id (designed voice_… or replicated id)"
+              onChange={(e: ChangeEvent<HTMLInputElement>) => onChange({ voice: e.target.value })}
+            />
+            <div className="field-hint">
+              Prebuilt studio voice, or a designed/replicated voice id. The sample
+              button auditions the saved voice plus the persona&apos;s voice style.
+            </div>
+          </div>
+        );
+      })()}
+
       {voiceEngine === 'remote' && (() => {
         const remoteAvail = data?.tts?.available?.remote;
         return (
@@ -548,6 +631,7 @@ export function EngineVoiceFields({
           cloudProvider={effective.cloudProvider}
           speed={previewSpeed}
           language={previewLanguage}
+          style={previewStyle}
           adminFetch={adminFetch}
         />
         {previewHint && <div className="field-hint mt-1.5">{previewHint}</div>}

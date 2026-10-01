@@ -707,6 +707,9 @@ export const PERSONA_TAGLINE_MAX = 80;
 export const PERSONA_LANGUAGE_MAX = 60;
 // A soul rides in the system prompt on every call: a per-call token cost.
 export const PERSONA_SOUL_MAX = 2000;
+// Delivery directive for the TTS voice (accent, pace, energy). Short by
+// design: long character blocks cause voice drift on 3.8 TTS.
+export const PERSONA_VOICE_STYLE_MAX = 300;
 export const PERSONA_SKILLS_LIMIT = 64;
 
 // Freeform organisation tags. Third copy of one pattern (skill.ts, show.ts) —
@@ -755,6 +758,13 @@ export function clampPersonaDial(v: unknown): number {
 // persona's `tts` and by the station rescue slot (`settings.tts.fallback`) — a
 // fallback slot is handed to speakWith() as a synthetic persona.
 
+// Adding an engine here? Check whether a second, RESTATED copy of this list
+// exists elsewhere — `SKILL_VOICE_ENGINES` in `schemas/skill.ts` is one, and
+// it is pinned EQUAL to this list by `scripts/skill-voice.test.ts`. `gemini`
+// (added in this PR) is the current example: that test starts failing the
+// moment this entry lands, and the fix is to add 'gemini' to
+// SKILL_VOICE_ENGINES in the same merge. See the note on that list — the two
+// lists cannot both be right, and the test is the tiebreak.
 export const TTS_ENGINES = [
   'piper',
   'kokoro',
@@ -762,6 +772,7 @@ export const TTS_ENGINES = [
   'pocket-tts',
   'cloud',
   'remote',
+  'gemini',
 ] as const;
 
 /**
@@ -924,10 +935,10 @@ export function ttsVoiceSlotSchema(where: string, opts?: { allowInherit?: boolea
       } else if (voice.length < 1 || voice.length > TTS_VOICE_MAX) {
         return fail(`${where}.voice must be 1-${TTS_VOICE_MAX} chars`);
       }
-    } else if (engine === 'remote' || engine === PERSONA_TTS_INHERIT) {
-      // remote: sidecar-interpreted ids. inherit: no engine is known yet, so no
-      // per-engine rule can apply (resolvePersonaVoiceSlot decides at speak
-      // time). Both leave only the length cap, and empty is valid.
+    } else if (engine === 'remote' || engine === 'gemini' || engine === PERSONA_TTS_INHERIT) {
+      // remote/gemini: sidecar- or Google-interpreted ids. inherit: no engine
+      // is known yet, so no per-engine rule can apply (resolvePersonaVoiceSlot
+      // decides at speak time). All leave only the length cap, and empty is valid.
       if (voice.length > TTS_VOICE_MAX) {
         return fail(`${where}.voice must be 0-${TTS_VOICE_MAX} chars`);
       }
@@ -1051,6 +1062,7 @@ export interface PersonaParsed {
   localColour: number;
   warmth: number;
   soul: string;
+  voiceStyle: string;
   language: string;
   avatar: string;
   tts: TtsVoiceSlot;
@@ -1103,6 +1115,10 @@ export const personaSchema = z
   .object({
     name: personaCoercedText('name', 1, PERSONA_NAME_MAX),
     soul: personaCoercedText('soul', 1, PERSONA_SOUL_MAX),
+    // Optional delivery directive for the TTS voice (accent, pace, energy).
+    // Absent/empty → the sidecar's built-in style for that voice. Coerced
+    // like soul: a non-string from an older admin build reads as empty.
+    voiceStyle: personaCoercedText('voiceStyle', 0, PERSONA_VOICE_STYLE_MAX),
     tagline: personaCoercedText('tagline', 0, PERSONA_TAGLINE_MAX),
     // Optional free text. Absent/empty → '' (English, no directive injected).
     // Unlike name/soul this REFUSES a non-string instead of coercing.
@@ -1210,6 +1226,7 @@ export const personaSchema = z
       localColour: p.localColour,
       warmth: p.warmth,
       soul: p.soul,
+      voiceStyle: p.voiceStyle,
       language: p.language,
       avatar: p.avatar,
       tts: p.tts,
@@ -1242,6 +1259,10 @@ export function repairPersonaForLoad(
     id: typeof raw.id === 'string' && PERSONA_ID_RE.test(raw.id) ? raw.id : undefined,
     name: typeof raw.name === 'string' ? raw.name.trim().slice(0, PERSONA_NAME_MAX) : undefined,
     soul: typeof raw.soul === 'string' ? raw.soul.trim().slice(0, PERSONA_SOUL_MAX) : undefined,
+    voiceStyle:
+      typeof raw.voiceStyle === 'string'
+        ? raw.voiceStyle.trim().slice(0, PERSONA_VOICE_STYLE_MAX)
+        : undefined,
     tagline:
       typeof raw.tagline === 'string' ? raw.tagline.trim().slice(0, PERSONA_TAGLINE_MAX) : '',
     language:
@@ -4439,8 +4460,150 @@ const skillCohostsSchema = z.preprocess(
   z.boolean({ error: 'cohosts must be a boolean' }).default(false),
 );
 
+// A skill's own TTS voice override — the same slot shape a persona carries
+// (`{engine, voice, cloudProvider}`), minus inherit/gain/speed: absent means
+// "the on-air DJ's voice", set means this skill always speaks in its own.
+// Engine + provider vocabularies are restated here (not imported from
+// persona.ts) because this module may import only zod — the mirror is one
+// flat file. scripts/skill-voice.test.ts pins them equal to the persona
+// originals, the same posture as the three tag-regex declarations.
+//
+// Why the two lists must match at all: a skill pins the SAME engine vocabulary
+// a persona does, so a skill must never become the one surface where a valid,
+// working engine is unreachable. That is why the pin is a deepEqual rather
+// than a subset check. ADDING AN ENGINE means adding it HERE in the same change —
+// the pin in scripts/skill-voice.test.ts is what makes the omission fail loudly
+// rather than quietly leaving one surface behind.
+// ─────────────────────────────────────────────────────────────────────────
+export const SKILL_VOICE_ENGINES = [
+  'piper',
+  'kokoro',
+  'chatterbox',
+  'pocket-tts',
+  'cloud',
+  'remote',
+  'gemini',
+] as const;
+
+export const SKILL_VOICE_PROVIDERS = [
+  'openai',
+  'elevenlabs',
+  'fish-audio',
+  'openai-compatible',
+] as const;
+
+export const SKILL_VOICE_MAX = 100;
+
+// Flat frontmatter keys, so hand edits stay one line each and the loader's
+// flat Record<string, string> needs no new shape.
+export const SKILL_VOICE_ENGINE_KEY = 'voiceEngine';
+export const SKILL_VOICE_ID_KEY = 'voiceId';
+export const SKILL_VOICE_PROVIDER_KEY = 'voiceProvider';
+
+// A voice id that could escape the voice folder: path separators, parent
+// refs, or absolute paths. chatterbox/pocket-tts resolve such values as
+// reference files, so a hand-edited or imported SKILL.md must never smuggle
+// one in through these keys.
+function isUnsafeVoiceId(value: string): boolean {
+  const v = value.trim();
+  return (
+    v.includes('/') ||
+    v.includes('\\') ||
+    v === '..' ||
+    v.startsWith('../') ||
+    v.startsWith('..\\') ||
+    /^[A-Za-z]:/.test(v) ||
+    v.startsWith('/')
+  );
+}
+
+// Lenient read of the three flat keys into a slot, or null when no override.
+// Disk-side twin of skillVoiceSlotSchema below: a hand-edited SKILL.md with a
+// bad engine — or an unsafe voice id — reads as "no override" rather than
+// failing the skill, while the strict schema refuses the same value from the
+// admin form.
+export function normalizeSkillVoice(data: Record<string, unknown> | null | undefined): {
+  engine: string;
+  voice: string;
+  cloudProvider: string;
+} | null {
+  if (!data) return null;
+  const engine = String((data as Record<string, unknown>)[SKILL_VOICE_ENGINE_KEY] ?? '').trim();
+  if (!engine) return null;
+  if (!(SKILL_VOICE_ENGINES as readonly string[]).includes(engine)) return null;
+  const voice = String((data as Record<string, unknown>)[SKILL_VOICE_ID_KEY] ?? '').trim().slice(0, SKILL_VOICE_MAX);
+  if (voice && isUnsafeVoiceId(voice)) return null;
+  const provider = String((data as Record<string, unknown>)[SKILL_VOICE_PROVIDER_KEY] ?? '').trim();
+  return {
+    engine,
+    voice,
+    cloudProvider: (SKILL_VOICE_PROVIDERS as readonly string[]).includes(provider) ? provider : 'openai',
+  };
+}
+
+// Strict form-side twin: null/undefined reads as "no override" (same as the
+// other optional skill fields); a present block must name a real engine, and
+// per-engine voice rules mirror ttsVoiceSlotSchema in persona.ts. Path-like
+// voice ids are refused outright — see isUnsafeVoiceId.
+const skillVoiceSlotSchema = z
+  .union([z.null(), z.undefined(), z.unknown()])
+  .optional()
+  .transform((raw, ctx) => {
+    if (raw == null) return undefined;
+    if (typeof raw !== 'object' || Array.isArray(raw)) {
+      ctx.issues.push({ code: 'custom', input: raw, message: 'voice must be an object or null' });
+      return z.NEVER;
+    }
+    const t = raw as Record<string, unknown>;
+    const engine = String(t.engine ?? '').trim();
+    if (!(SKILL_VOICE_ENGINES as readonly string[]).includes(engine)) {
+      ctx.issues.push({
+        code: 'custom',
+        input: raw,
+        message: `voice.engine must be one of: ${SKILL_VOICE_ENGINES.join(', ')}`,
+      });
+      return z.NEVER;
+    }
+    const providerRaw = String(t.cloudProvider ?? 'openai').trim() || 'openai';
+    if (!(SKILL_VOICE_PROVIDERS as readonly string[]).includes(providerRaw)) {
+      ctx.issues.push({
+        code: 'custom',
+        input: raw,
+        message: `voice.cloudProvider must be one of: ${SKILL_VOICE_PROVIDERS.join(', ')}`,
+      });
+      return z.NEVER;
+    }
+    let voice = String(t.voice ?? '').trim();
+    const fail = (message: string) => {
+      ctx.issues.push({ code: 'custom', input: raw, message });
+      return z.NEVER;
+    };
+    if (voice.length > SKILL_VOICE_MAX) return fail(`voice.voice must be 0-${SKILL_VOICE_MAX} chars`);
+    if (voice && isUnsafeVoiceId(voice)) {
+      return fail('voice.voice must not be a path — a voice id or filename, never a directory traversal');
+    }
+    if (engine === 'kokoro' && !/^[a-z]{2}_[a-z0-9]+$/.test(voice)) {
+      return fail('voice.voice must match <lang><gender>_<name> for kokoro, e.g. bf_isabella');
+    }
+    if (engine === 'chatterbox' && voice && !/^[A-Za-z0-9_.-]{1,80}\.wav$/.test(voice)) {
+      return fail('voice.voice for chatterbox must be a .wav filename (no path), or empty for the default voice');
+    }
+    if (engine === 'pocket-tts') {
+      if (!voice) voice = 'alba';
+      if (!/^[a-z][a-z0-9_-]{0,39}$/.test(voice) && !/^[A-Za-z0-9_.-]{1,80}\.wav$/.test(voice)) {
+        return fail('voice.voice for pocket-tts must be a built-in voice id (e.g. alba) or a .wav filename');
+      }
+    }
+    if (engine === 'cloud' && providerRaw !== 'openai-compatible' && !voice) voice = 'alloy';
+    if (engine === 'piper' && voice && !/^[A-Za-z0-9_.-]{1,100}\.onnx$/.test(voice) && !/^[a-z]{2}_[a-z0-9]+$/.test(voice)) {
+      return fail('voice.voice for piper must be an .onnx filename (no path), or empty for the default voice');
+    }
+    return { engine, voice, cloudProvider: providerRaw };
+  });
+
 // The fields every skill's SKILL.md carries, built-in or custom.
 export const builtinSkillFileSchema = z.object({
+  voice: skillVoiceSlotSchema,
   label: skillLabelSchema,
   cooldown: skillCooldownSchema,
   cron: skillCronSchema,
@@ -4494,6 +4657,7 @@ export function skillFieldsFrom(kind: string, parsed: SkillFileParsed) {
     requiresKey: parsed.requiresKey,
     tags: parsed.tags,
     brief: parsed.brief,
+    voice: parsed.voice ?? null,
   };
 }
 

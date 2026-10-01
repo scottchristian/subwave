@@ -33,6 +33,9 @@ interface VoicePreviewButtonProps {
   language?: string;
   // Explicit sample text (overrides the default/localized sentence).
   text?: string;
+  // Delivery directive to audition (persona voiceStyle). Only the remote
+  // engine reads it; empty means the endpoint's built-in style.
+  style?: string;
   // Unsaved corrections override — tests rules that haven't been saved yet.
   corrections?: { from: string; to: string }[];
   // Unsaved ElevenLabs sliders (issue #696), so the sample auditions the CURRENT
@@ -56,7 +59,7 @@ interface VoicePreviewButtonProps {
 type PreviewState = 'idle' | 'loading' | 'error';
 
 export function VoicePreviewButton({
-  engine, voice, cloudProvider, cloudModel, speed, lang, language, text, corrections, voiceSettings, fishSettings, adminFetch, disabled, className,
+  engine, voice, cloudProvider, cloudModel, speed, lang, language, text, corrections, voiceSettings, fishSettings, style, adminFetch, disabled, className,
 }: VoicePreviewButtonProps) {
   const [state, setState] = useState<PreviewState>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -80,7 +83,7 @@ export function VoicePreviewButton({
     discardSample();
     setState('idle');
     setError(null);
-  }, [engine, voice, cloudProvider, cloudModel, speed, lang, language, fishSettings?.temperature, fishSettings?.topP, fishSettings?.latency, discardSample]);
+  }, [engine, voice, cloudProvider, cloudModel, speed, lang, language, style, fishSettings?.temperature, fishSettings?.topP, fishSettings?.latency, discardSample]);
 
   const onClick = async () => {
     // Re-click while synthesizing cancels the request.
@@ -93,7 +96,7 @@ export function VoicePreviewButton({
     try {
       const res = await fetchPreviewSample(
         adminFetch,
-        { engine, voice, cloudProvider, cloudModel, speed, lang, language, text, corrections, voiceSettings, fishSettings },
+        { engine, voice, cloudProvider, cloudModel, speed, lang, language, text, corrections, voiceSettings, fishSettings, style },
         ac.signal,
       );
       if (ac.signal.aborted) return;

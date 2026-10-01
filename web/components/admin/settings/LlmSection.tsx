@@ -7,7 +7,6 @@ import { adminResponse } from '../../../lib/admin-query';
 import { useModelDiscovery } from '@/hooks/useModelDiscovery';
 import { V3AlertDialog } from '../../ui/alert-dialog';
 import { Input } from '../../ui/input';
-import { Textarea } from '../../ui/textarea';
 import { Label } from '../../ui/label';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
@@ -332,7 +331,11 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
       llm: {
         provider: activeProvider,
         model: form.llm.model,
-        modelOverrides: form.llm.modelOverrides ?? {},
+        modelOverrides: Object.fromEntries(
+          Object.entries(form.llm.modelOverrides || {})
+            .map(([k, v]) => [k, (v || '').trim()] as const)
+            .filter(([, v]) => v),
+        ),
         ollamaUrl: form.llm.ollamaUrl,
         numCtx: form.llm.numCtx,
         repeatPenalty: form.llm.repeatPenalty,
@@ -352,8 +355,8 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         maxOutputTokens: form.llm.maxOutputTokens,
         banterPrompt: form.llm.banterPrompt,
         listenerPrompt: form.llm.listenerPrompt,
-        geminiSafety: form.llm.geminiSafety,
         discoverySteps: form.llm.discoverySteps,
+        geminiSafety: { ...form.llm.geminiSafety },
         ...(INLINE_KEY_PROVIDERS.includes(activeProvider) && compatKeyInput.trim()
           ? { apiKey: compatKeyInput.trim() }
           : {}),
@@ -1224,39 +1227,51 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         </div>
       </Card>
 
-      <Card title="Agent Prompts" sub="custom instructions">
+      {form.llm.provider === 'google' && (
+      <Card title="Gemini Safety Filters" sub="content blocking">
         <div className="field">
-          <Label>Banter Rules</Label>
-          <Textarea
-            value={form.llm.banterPrompt ?? ''}
-            onChange={(e: ChangeEvent<HTMLTextAreaElement>) =>
-              setForm(f => ({ ...f, llm: { ...f.llm, banterPrompt: e.target.value } }))
-            }
-            placeholder="Enter rules for banter..."
-            className="min-h-[120px] max-w-[600px] font-mono text-[13px]"
-          />
-          <div className="field-hint">
-            Extra instructions injected into the banter prompt (e.g. how the DJs should interact, constraints on what they can say). Leave blank to disable.
-            <br />
-            Available variables: <code className="text-[11px] bg-white/5 px-1 py-0.5 rounded text-white/70">{'{host}'}</code>, <code className="text-[11px] bg-white/5 px-1 py-0.5 rounded text-white/70">{'{guest}'}</code>, <code className="text-[11px] bg-white/5 px-1 py-0.5 rounded text-white/70">{'{guests}'}</code>, <code className="text-[11px] bg-white/5 px-1 py-0.5 rounded text-white/70">{'{show}'}</code>
+          <Label>Block categories</Label>
+          <div className="mt-2 flex flex-col gap-2">
+            {[
+              { id: 'harassment', label: 'Harassment' },
+              { id: 'hateSpeech', label: 'Hate Speech' },
+              { id: 'sexuallyExplicit', label: 'Sexually Explicit' },
+              { id: 'dangerousContent', label: 'Dangerous Content' },
+            ].map(c => (
+              <label key={c.id} className="flex cursor-pointer items-center gap-2 text-[13px] leading-[1.5] text-ink">
+                <input
+                  type="checkbox"
+                  checked={!!form.llm.geminiSafety?.[c.id as keyof typeof form.llm.geminiSafety]}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setForm(f => ({
+                      ...f,
+                      llm: {
+                        ...f.llm,
+                        geminiSafety: {
+                          ...(f.llm.geminiSafety || { harassment: false, hateSpeech: false, sexuallyExplicit: false, dangerousContent: false }),
+                          [c.id]: e.target.checked
+                        }
+                      }
+                    }))
+                  }
+                  className="accent-[var(--accent)]"
+                />
+                <span>{c.label}</span>
+              </label>
+            ))}
           </div>
-        </div>
-
-        <div className="field mt-4">
-          <Label>Listener Activities (Core Prompt)</Label>
-          <Textarea
-            value={form.llm.listenerPrompt ?? ''}
-            onChange={(e: ChangeEvent<HTMLTextAreaElement>) =>
-              setForm(f => ({ ...f, llm: { ...f.llm, listenerPrompt: e.target.value } }))
-            }
-            placeholder="Enter rules for listener activities..."
-            className="min-h-[120px] max-w-[600px] font-mono text-[13px]"
-          />
-          <div className="field-hint">
-            Instructions injected into the core DJ prompt to guide how the AI describes listener activities during segments.
+          <div className="field-hint mt-2">
+            Google-only content blocking, sent on the native <code>google</code> provider
+            leg. Check a category to have Gemini block it; uncheck to allow swearing or
+            sensitive topics. Other providers ignore these flags.
+          </div>
+          <div className="field-hint mt-2">
+            These boxes apply to the primary leg. A <code>google</code> fallback leg
+            carries its own set of flags.
           </div>
         </div>
       </Card>
+      )}
 
       <Card title="Next-track picker" sub="how the DJ chooses">
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
@@ -1594,6 +1609,53 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         </div>
       </Card>
       </Advanced>
+
+      <Card title="Task Model Overrides" sub="route specific agent tasks to a different model">
+        <div className="grid gap-[18px]">
+          <div className="field-hint">
+            The tasks below default to using the primary model. To route a heavy task to a larger
+            model while keeping the station running on a smaller, faster model, select an override
+            below. Overrides apply to the <strong>primary provider</strong> only — leave blank for the primary model.
+          </div>
+          {[
+            { id: 'generateBanter', label: 'Presenter Banter', desc: 'Multi-speaker conversation between personas' },
+            { id: 'djAgentSegment', label: 'Script Generation', desc: 'Single-speaker scripts for news, weather, deep-cuts' },
+            { id: 'djAgentPick', label: 'Track Selection', desc: 'The AI DJ picking the next track' },
+            { id: 'djAgentRequest', label: 'Listener Requests', desc: 'Negotiation and fulfillment of track requests' },
+            { id: 'matchRequest', label: 'Request Matcher', desc: 'Matching request text against the library' },
+            { id: 'identifyRequest', label: 'Search Identifier', desc: 'Web search to identify a vague request' },
+          ].map(task => (
+            <div className="field" key={task.id}>
+              <Label>{task.label}</Label>
+              <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
+                {primaryDiscovery.models.length > 0 ? (
+                  <ModelCombobox
+                    models={primaryDiscovery.models}
+                    value={form.llm.modelOverrides?.[task.id] || ''}
+                    onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, modelOverrides: { ...(f.llm.modelOverrides || {}), [task.id]: v } } }))}
+                    placeholder="Use primary model"
+                  />
+                ) : (
+                  <Input
+                    value={form.llm.modelOverrides?.[task.id] || ''}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({ ...f, llm: { ...f.llm, modelOverrides: { ...(f.llm.modelOverrides || {}), [task.id]: e.target.value } } }))
+                    }
+                    placeholder="Use primary model (or type model ID)"
+                    className="max-w-[360px]"
+                  />
+                )}
+                {!!form.llm.modelOverrides?.[task.id] && (
+                  <Btn sm onClick={() => setForm(f => ({ ...f, llm: { ...f.llm, modelOverrides: { ...(f.llm.modelOverrides || {}), [task.id]: '' } } }))}>
+                    Clear
+                  </Btn>
+                )}
+              </div>
+              <div className="field-hint">{task.desc}</div>
+            </div>
+          ))}
+        </div>
+      </Card>
 
       <SaveBar
         note={`Active model: ${data.llm?.active}. Applies to the next LLM call, no restart needed.`}

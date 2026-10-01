@@ -1,14 +1,33 @@
 // googleSafetyOptions (llm/internal/provider/capabilities.ts) — the per-call
 // safety channel for the native `google` provider.
 //
-// Proven by wire capture: ai-sdk reads safetySettings ONLY from per-call
-// providerOptions, never from the model-construction settings object, which
-// never reaches the request body. Checked = block that category;
-// unchecked/absent = allow. Every other provider gets {} (no-op spread), so
-// call sites never name a provider.
-import { test } from 'node:test';
+// ai-sdk reads safetySettings ONLY from per-call providerOptions: the
+// model-construction options type carries a single `threshold` string, not a
+// per-category list, and `safetySettings` is resolved from the parsed
+// providerOptions in the request body builder. So the only channel that can
+// express per-category thresholds is the one used here. Checked = block that
+// category; unchecked/absent = allow. Every other provider gets {} (no-op
+// spread), so call sites never name a provider.
+//
+// The cold-load half is the load-bearing one: settings.llm's section blocks
+// compose explicitly and do NOT spread DEFAULTS, so a geminiSafety missing
+// from load() would validate, save, and work all process — then silently
+// vanish on the next restart. It has bitten twice upstream
+// (tts.cloud.compatParams, llm.repeatPenalty), so pin it the way
+// scripts/llm-repeat-penalty.test.ts does.
 import assert from 'node:assert/strict';
-import { googleSafetyOptions } from '../src/llm/internal/provider/capabilities.js';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+
+// STATE_DIR redirected BEFORE the first import of anything config-derived.
+const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-gemini-safety-'));
+process.env.STATE_DIR = stateRoot;
+
+const { setCache } = await import('../src/settings/store.js');
+const settings = await import('../src/settings.js');
+const { googleSafetyOptions } = await import('../src/llm/internal/provider/capabilities.js');
 
 const FULL = {
   provider: 'google',
@@ -39,4 +58,31 @@ test('every other provider gets an empty object', () => {
   }
   assert.deepEqual(googleSafetyOptions(null), {});
   assert.deepEqual(googleSafetyOptions(undefined), {});
+});
+
+// Load a hand-written settings.json the way a controller restart would.
+const SETTINGS_PATH = path.join(stateRoot, 'settings.json');
+async function coldLoad(llm: Record<string, unknown>) {
+  writeFileSync(SETTINGS_PATH, JSON.stringify({
+    llm: { provider: 'google', model: 'gemini-2.5-flash', ...llm },
+  }));
+  setCache(null);
+  await settings.load();
+  return settings.get().llm;
+}
+
+test('the operator\'s boxes survive a controller restart', async () => {
+  const llm = await coldLoad({
+    geminiSafety: { harassment: true, hateSpeech: false, sexuallyExplicit: true, dangerousContent: false },
+  });
+  assert.deepEqual(llm.geminiSafety, {
+    harassment: true, hateSpeech: false, sexuallyExplicit: true, dangerousContent: false,
+  });
+});
+
+test('a hand-edited non-boolean repairs to allow and never wedges boot', async () => {
+  const llm = await coldLoad({ geminiSafety: { harassment: 'yes', hateSpeech: 1 } });
+  assert.deepEqual(llm.geminiSafety, {
+    harassment: false, hateSpeech: false, sexuallyExplicit: false, dangerousContent: false,
+  });
 });

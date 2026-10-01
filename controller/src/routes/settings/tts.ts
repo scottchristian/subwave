@@ -43,6 +43,9 @@ router.post('/settings/tts/preview', requireAdmin, async (req, res) => {
       language: typeof body.language === 'string' ? body.language : undefined,
       text: typeof body.text === 'string' ? body.text : undefined,
       corrections: Array.isArray(body.corrections) ? body.corrections : undefined,
+      // Delivery directive to audition (persona voiceStyle). Only the remote
+      // engine reads it.
+      style: typeof body.style === 'string' ? body.style : undefined,
       voiceSettings: (body.voiceSettings && typeof body.voiceSettings === 'object')
         ? body.voiceSettings
         : undefined,

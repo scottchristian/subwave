@@ -389,12 +389,8 @@ export const DEFAULTS = {
     model: '',
     banterPrompt: '- Banter does not need to be civil. It is fine to be harsh, sarcastic, or mean to one another if it fits the personalities. Swearing is allowed occasionally, but do not swear constantly.\n- Mix up the topics heavily: accuse the other one of farting, be sexual from time to time, and have the male ask the female if they can get their tits out. Be highly inappropriate and edgy.',
     listenerPrompt: 'When guessing what listeners are doing right now, vary it heavily. Describe all sorts of daily lives: office workers sitting at a computer, groundskeepers riding on a mower, tradies on a worksite, or maybe they are a lucky bastard who is retired and playing golf. Pick completely different listener activities every time.',
-    geminiSafety: {
-      harassment: false,
-      hateSpeech: false,
-      sexuallyExplicit: false,
-      dangerousContent: false,
-    },
+    // Per-agent-task model overrides ({ [kind]: model }). Empty/absent reads
+    // as "use the primary model"; overrides apply to the primary provider only.
     modelOverrides: {} as Record<string, string>,
     // Legacy single inline-key slot, superseded by `keys`. Always '' after
     // load(); resolution reads `keys`, never this.
@@ -455,6 +451,15 @@ export const DEFAULTS = {
     // field). Injected into the request body — the AI SDK has no field for it —
     // and ignored by every other provider, Ollama included.
     repeatPenalty: 1.15,
+    // HARM_CATEGORY thresholds for the native `google` provider leg. Checked =
+    // block that category; unchecked/absent = allow (BLOCK_NONE). Only the
+    // google leg reads them — every other provider ignores the field.
+    geminiSafety: {
+      harassment: false,
+      hateSpeech: false,
+      sexuallyExplicit: false,
+      dangerousContent: false,
+    },
     // On: the session DJ agent drives picks, links and requests as a tool-loop
     // over the session chat history. Off: the stateless pool picker runs instead,
     // still inside a session and still logged.

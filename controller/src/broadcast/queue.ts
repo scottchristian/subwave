@@ -27,7 +27,7 @@ import * as showBoundary from './show-boundary.js';
 import * as blocklist from '../music/blocklist.js';
 import { artistRootKey, trackKey, type CandidateLike } from '../music/recency.js';
 import { albumKeyFor } from '../music/album-facts.js';
-import { speak, speakExchange, voiceGainDb } from '../audio/tts.js';
+import { speak, voiceGainDb } from '../audio/tts.js';
 import {
   writeSilentWav,
   discardSilentWav,
@@ -2267,21 +2267,23 @@ class Queue {
       return false;
     }
     const rendered: { persona: Persona; text: string; wavPath: string }[] = [];
-    let isBatched = false;
+    // Exchanges always render one line at a time (see the comment below), so
+    // there is no batched path left to report. Kept as a const rather than
+    // deleted because every branch below still reads it as "was this one
+    // segment or several" — that question is what decides whether the caller
+    // gets an exchange or a single segment back.
+    const isBatched = false;
     try {
-      try {
-        const wavPath = await speakExchange(lines, { kind });
-        const combinedText = lines.map(l => `${l.persona?.name || 'DJ'}: ${l.text}`).join('\n');
-        rendered.push({ persona: lines[0].persona, text: combinedText, wavPath });
-        isBatched = true;
-      } catch (err) {
-        this.log('scheduler', `Batch multi-speaker failed (or unsupported): ${(err as Error).message}. Falling back to sequential rendering.`);
-        for (const l of lines) {
-          const text = normalizeForDisplay(l.text || '');
-          if (!text) continue;
-          const wavPath = await this._speak(text, { kind, persona: l.persona });
-          rendered.push({ ...l, text, wavPath });
-        }
+      // One render per line, so every line keeps its OWN gain, its own session
+      // turn, its own speaker attribution and its own live-edge stamp. A single
+      // batched render would collapse N lines into one segment, which loses the
+      // per-speaker attribution this path exists to preserve and would settle a
+      // `handoff` exchange on a boundary it is supposed to hold for.
+      for (const l of lines) {
+        const text = normalizeForDisplay(l.text || '');
+        if (!text) continue;
+        const wavPath = await this._speak(text, { kind, persona: l.persona });
+        rendered.push({ ...l, text, wavPath });
       }
     } catch (err) {
       this.log('error', `Exchange render failed: ${(err as Error).message}`);

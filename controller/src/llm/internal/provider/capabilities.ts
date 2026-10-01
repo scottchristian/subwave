@@ -240,11 +240,12 @@ export function forcedToolChoice(cfg: any): 'required' | 'auto' {
 }
 
 // Per-call safety thresholds for the native `google` provider, as ai-sdk
-// providerOptions. ai-sdk reads safetySettings ONLY here — never from the
-// model-construction settings object, which never reaches the wire (proven:
-// a construction-arg threshold produced no safetySettings in the request
-// body). Checked = block that category; unchecked/absent = allow (BLOCK_NONE).
-// Every other provider gets {} (no-op spread), so call sites never name one.
+// providerOptions. This is the ONLY channel that can express them: the
+// model-construction options carry a single `threshold` string, while
+// `safetySettings` is resolved from the per-call providerOptions when the
+// request body is built. Checked = block that category; unchecked/absent =
+// allow (BLOCK_NONE). Every other provider gets {} (no-op spread), so call
+// sites never name one.
 export function googleSafetyOptions(cfg: any): Record<string, unknown> {
   if (!cfg || cfg.provider !== 'google') return {};
   const g = (cfg as any).geminiSafety || {};

@@ -69,6 +69,7 @@ import {
   isDefaultTakeover,
   mintId,
   normalizeLlmHeaders,
+  normalizeGeminiSafety,
   normalizeLlmKeys,
   normalizeLlmProviderBaseUrls,
   normalizeMoodMap,
@@ -936,30 +937,25 @@ export async function load() {
         ? stored.llm.provider
         : DEFAULTS.llm.provider,
       model: typeof stored.llm?.model === 'string' ? stored.llm.model.trim() : DEFAULTS.llm.model,
-      modelOverrides:
-        stored.llm?.modelOverrides && typeof stored.llm.modelOverrides === 'object'
-          ? { ...stored.llm.modelOverrides }
-          : DEFAULTS.llm.modelOverrides,
+      modelOverrides: (() => {
+        // String values only, trimmed, empties dropped (blank = "use primary").
+        // Anything else reads as no overrides rather than wedging boot.
+        const raw = stored.llm?.modelOverrides;
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ...DEFAULTS.llm.modelOverrides };
+        const out: Record<string, string> = {};
+        for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+          if (typeof k !== 'string' || !k || typeof v !== 'string') continue;
+          const model = v.trim();
+          if (model) out[k] = model;
+        }
+        return out;
+      })(),
       banterPrompt: typeof stored.llm?.banterPrompt === 'string'
         ? stored.llm.banterPrompt.trim()
         : DEFAULTS.llm.banterPrompt,
       listenerPrompt: typeof stored.llm?.listenerPrompt === 'string'
         ? stored.llm.listenerPrompt.trim()
         : DEFAULTS.llm.listenerPrompt,
-      geminiSafety: {
-        harassment: typeof stored.llm?.geminiSafety?.harassment === 'boolean'
-          ? stored.llm.geminiSafety.harassment
-          : DEFAULTS.llm.geminiSafety.harassment,
-        hateSpeech: typeof stored.llm?.geminiSafety?.hateSpeech === 'boolean'
-          ? stored.llm.geminiSafety.hateSpeech
-          : DEFAULTS.llm.geminiSafety.hateSpeech,
-        sexuallyExplicit: typeof stored.llm?.geminiSafety?.sexuallyExplicit === 'boolean'
-          ? stored.llm.geminiSafety.sexuallyExplicit
-          : DEFAULTS.llm.geminiSafety.sexuallyExplicit,
-        dangerousContent: typeof stored.llm?.geminiSafety?.dangerousContent === 'boolean'
-          ? stored.llm.geminiSafety.dangerousContent
-          : DEFAULTS.llm.geminiSafety.dangerousContent,
-      },
       // Legacy single slot is migrated into `keys` below, then cleared — there
       // is exactly one source of truth for inline keys (issue #657).
       apiKey: '',
@@ -993,6 +989,7 @@ export async function load() {
       // value survived in memory for that process, vanished on restart, and
       // llama.cpp fell back to its own 1.0 default with nothing in the logs.
       repeatPenalty: clampRepeatPenalty(stored.llm?.repeatPenalty, DEFAULTS.llm.repeatPenalty),
+      geminiSafety: normalizeGeminiSafety(stored.llm?.geminiSafety),
       pickerAgent:
         typeof stored.llm?.pickerAgent === 'boolean'
           ? stored.llm.pickerAgent
@@ -1989,9 +1986,6 @@ export async function update(patch) {
     // Route the primary inline key into keys[provider] AFTER the provider is
     // resolved, so it's stored under the identity it belongs to (issue #657).
     applyInlineKey(next.llm, next.llm.provider, l.apiKey);
-    if (l.modelOverrides !== undefined) {
-      next.llm.modelOverrides = { ...l.modelOverrides };
-    }
     if (l.pickerAgent !== undefined) {
       next.llm.pickerAgent = !!l.pickerAgent;
     }
