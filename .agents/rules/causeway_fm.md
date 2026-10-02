@@ -181,3 +181,11 @@ If the main web dashboard reports: `can’t reach Icecast admin: /listeners/conn
 ```bash
 ssh root@192.168.68.196 'docker restart sub-wave-controller'
 ```
+### Sidecar retired / 2026-10-02 — all personas moved to `gemini`, `sub-wave-gemini-tts` now idle
+The `remote` engine (Causeway-local `custom_assets/gemini_tts.py` sidecar on `gemini-tts:5001`) was standing in for the upstream `gemini` engine, which did not exist upstream yet. Now that it does, all 12 personas were flipped `engine: remote -> gemini` in one `POST /settings` (backup: `state/settings.json.pre-gemini-20261002-164352`). Every persona's existing voice was already one of the 30 valid Gemini voices, so all were kept — no voice was remapped.
+**Why this matters:** `speakExchange` requires EVERY line of a banter exchange to resolve to `gemini`, so under `remote` the whole roster threw "only supports an all-gemini exchange" and `announceExchange` silently fell back to per-line renders. All 4 banter shows were rendering line-by-line, not as one conversational clip. After the flip, a 4-line exchange is ONE `gemini` call: stats show `byEngine [{"engine":"gemini","count":1,"chars":240}]`, `fellBack: 0`, ~13s.
+**Two behavioural differences to watch (sidecar had them, direct engine does not):**
+1. **Tasmanian place-name pronunciation is GONE.** The sidecar appended `Sook rhymes with look; sooking rhymes with looking; Launceston sounds like LON ses tun.` to every style prompt. `controller/src/audio/gemini.ts` has no equivalent. If mispronunciations come back, that string is the cause — it needs a station-level style suffix, not a per-persona `voiceStyle` edit.
+2. **429 behaviour differs.** Sidecar: 3 retries, 20s apart. Direct engine: fails over to the next model immediately and lets the controller fallback chain (`chatterbox`) cover. Not a bug, but under free-tier quota exhaustion the two paths feel different.
+The container is still running and answering `/health` (it is probed on an interval regardless of use). Nothing references it now except `tts.remote.url`, which is left in place as the switch back.
+**Guard:** if the sidecar is ever restarted and shows `/speak` traffic again, a persona has drifted off `gemini` — re-check `personas[].tts.engine`.
