@@ -114,27 +114,30 @@ export const PERSONA_TTS_ENGINES = [PERSONA_TTS_INHERIT, ...TTS_ENGINES] as cons
  */
 export const TTS_INHERITABLE_VOICE_ENGINES = ['piper', 'kokoro'] as const;
 
-// Gemini TTS models, cheapest/most reliable first — the dispatcher's fallback
-// order is this list, and the admin Voice panel offers it as a dropdown so the
-// operator is not stuck on whatever the chain happens to try first.
+// Gemini TTS models selectable from the Voice panel.
 //
-// Every id here was verified to return audio from
-// `models/<id>:generateContent` with `responseModalities: ['AUDIO']`. Models whose
-// name merely CONTAINS "tts" are not in this list: `gemini-2.5-flash-native-audio-*`
-// is the conversational-audio family and rejects the single-speaker speechConfig.
+// Verified through the EXACT request gemini.ts builds — `/interactions` with a
+// `speech_metadata` annotation and a `speech_config` voice — not through the
+// plain `generateContent` endpoint, which every one of these answers and which
+// therefore proves nothing about whether this engine can use them.
+//
+// The engine always sends a speech annotation, because per-persona voiceStyle is
+// a feature. That is what rules out most of the catalogue:
+//
+//   gemini-3.1-flash-tts-preview  -> "Speech metadata is not supported for this model."
+//   gemini-2.5-flash-preview-tts -> "Speech annotations are not supported for model"
+//   gemini-2.5-pro-preview-tts   -> "Speech annotations are not supported for model"
+//
+// All three synthesise audio perfectly through `generateContent`, and all three
+// would 400 on every single render through this engine. They are deliberately
+// absent rather than offered-and-broken. Unlocking them means the engine has to
+// omit an EMPTY annotation — which cannot help while a persona carries a
+// voiceStyle — so that is a separate decision, not a dropdown entry.
 export const GEMINI_TTS_MODELS = [
   'gemini-3.8-flash-lite-tts',
   'gemini-3.8-flash-tts',
-  'gemini-3.1-flash-tts-preview',
-  'gemini-2.5-flash-preview-tts',
-  'gemini-2.5-pro-preview-tts',
 ] as const;
 
-// Google's prebuilt single-speaker voices, as accepted in
-// `speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName`. Each id was verified
-// against the live API. This is NOT the same set as `GET /v1beta/voices`, which
-// lists the Live/native-audio catalogue and omits several of these (Puck, Zephyr
-// and Kore among them) — so the endpoint is not a usable source for this list.
 export const GEMINI_TTS_VOICES = [
   'Zephyr',
   'Puck',

@@ -15,6 +15,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+
 import { TTS_ENGINES } from '../src/schemas/persona.js';
 import { splitCues } from '../src/audio/gemini.js';
 import { fallbackTextFor } from '../src/audio/tts-fallback.js';
@@ -150,6 +151,94 @@ test('the Gemini card is gone from the ENGINE grid, not just from ENGINES', asyn
   assert.match(panel, /const providerCloudReady = geminiSelected\s*\n\s*\? available\.gemini/,
     'the Cloud badge must read the engine flag while gemini is selected');
 });
+
+test('the Gemini model and voice vocabularies are the verified lists', async () => {
+  const { GEMINI_TTS_MODELS, GEMINI_TTS_VOICES } = await import('../src/schemas/persona.js');
+
+  // Every id here was verified against the live API: each model returned audio
+  // from generateContent with responseModalities ['AUDIO'], and each voice was
+  // accepted in speechConfig.prebuiltVoiceConfig.voiceName.
+  // Only the models that survive the engine's OWN request shape belong here:
+  // `/interactions` with a speech_metadata annotation and a speech_config voice.
+  // Verified through exactly that body — the plain generateContent endpoint
+  // answers for all five and so proves nothing.
+  assert.deepEqual([...GEMINI_TTS_MODELS], [
+    'gemini-3.8-flash-lite-tts',
+    'gemini-3.8-flash-tts',
+  ]);
+  // The three that DO synthesise audio, but only through generateContent. Listed
+  // here as excluded-on-purpose: the engine always sends a speech annotation
+  // (per-persona voiceStyle is a feature) and all three reject it outright, so
+  // offering them would be three dead dropdown entries that 400 every render.
+  for (const m of [
+    'gemini-3.1-flash-tts-preview',
+    'gemini-2.5-flash-preview-tts',
+    'gemini-2.5-pro-preview-tts',
+  ]) {
+    assert.ok(!(GEMINI_TTS_MODELS as readonly string[]).includes(m),
+      `${m} rejects speech annotations and must not be selectable`);
+  }
+  // The conversational-audio family is not a TTS model at all.
+  for (const m of GEMINI_TTS_MODELS) {
+    assert.doesNotMatch(m, /native-audio/, `${m} does not accept single-speaker TTS config`);
+    assert.match(m, /tts/, `${m} is not a TTS model`);
+  }
+  assert.equal(GEMINI_TTS_VOICES.length, 30);
+  assert.equal(new Set(GEMINI_TTS_VOICES).size, 30, 'voice list must not repeat an id');
+  assert.ok(GEMINI_TTS_VOICES.includes('Puck'), 'Puck is the engine default');
+  // GET /v1beta/voices is NOT this list — it is the Live/native-audio catalogue
+  // and omits Puck, Zephyr and Kore. Hard-wiring it here would delete voices the
+  // API accepts.
+  assert.ok(GEMINI_TTS_VOICES.includes('Zephyr') && GEMINI_TTS_VOICES.includes('Kore'));
+});
+
+test('a chosen Gemini model leads the chain instead of replacing it', async () => {
+  const fs = await import('node:fs');
+  const gemini = fs.readFileSync(new URL('../src/audio/gemini.ts', import.meta.url), 'utf8');
+  // Pinning a model must not be able to leave the station mute: if the chosen
+  // model 404s or is retired, the loop still has the rest of the chain behind it.
+  assert.match(gemini, /function modelChain\(chosen\?: string\)/,
+    'the chain must be built around the operator\'s pick');
+  assert.match(gemini, /\[pick, \.\.\.MODELS\.filter\(\(m\) => m !== pick\)\]/,
+    'the chosen model leads, and the rest of the chain still stands behind it');
+  assert.match(gemini, /if \(!pick \|\| pick === MODELS\[0\]\) return MODELS;/,
+    'an unpinned station keeps the chain unchanged');
+});
+
+test('the station Gemini choice is a floor under the persona, not a lock', async () => {
+  const fs = await import('node:fs');
+  const tts = fs.readFileSync(new URL('../src/audio/tts.ts', import.meta.url), 'utf8');
+  // A persona that names a voice still wins; one that leaves it blank inherits
+  // the station default. Without the fallback the panel's "default voice" would
+  // do nothing for exactly the personas that leave it alone.
+  assert.match(tts, /personaTts\.engine === 'gemini' && personaTts\.voice\)\s*\n\s*\? personaTts\.voice\s*\n\s*: \(typeof stationGemini\.voice/,
+    'the persona voice must win, with the station voice as the fallback');
+  // And the preview's UNSAVED model must outrank the saved one, or "Play sample"
+  // auditions last week's model instead of the one in the dropdown.
+  assert.match(tts, /opts\.geminiModel[\s\S]{0,200}stationGemini\.model/,
+    'an unsaved preview model must outrank the saved station model');
+});
+
+test('the Voice panel offers both, and sends both', async () => {
+  const fs = await import('node:fs');
+  const panel = fs.readFileSync(
+    new URL('../../web/components/admin/settings/TtsSection.tsx', import.meta.url), 'utf8');
+  // Sourced from the generated mirror, so the dropdown and the server's
+  // validation cannot drift into offering something the save path rejects.
+  assert.match(panel, /import \{ GEMINI_TTS_MODELS, GEMINI_TTS_VOICES \} from '\.\.\/\.\.\/\.\.\/lib\/schemas\.generated'/);
+  assert.match(panel, /<Label>Model<\/Label>/, 'a model picker must exist');
+  assert.match(panel, /<Label>Default voice<\/Label>/, 'a default-voice picker must exist');
+  assert.match(panel, /GEMINI_TTS_MODELS\.map\(/);
+  assert.match(panel, /GEMINI_TTS_VOICES\.map\(/);
+  // '' is the "walk the fallback chain" choice and must survive the round trip.
+  assert.match(panel, /<SelectItem value="">Automatic \(fallback chain\)<\/SelectItem>/);
+  assert.match(panel, /model: form\.tts\.gemini\?\.model \?\? ''/, 'the payload must send the model');
+  assert.match(panel, /voice: form\.tts\.gemini\?\.voice \?\? 'Puck'/, 'the payload must send the voice');
+  // Dirty-tracking: without these the form saves nothing and says nothing.
+  assert.match(panel, /form\.tts\.gemini\?\.model \|\| ''\)\.trim\(\) !== savedGeminiModel/);
+  assert.match(panel, /form\.tts\.gemini\?\.voice \|\| ''\) !== savedGeminiVoice/);
+});
+
 
 test('the cloud-only panel content is gated on the selection, not removed', async () => {
   const fs = await import('node:fs');
