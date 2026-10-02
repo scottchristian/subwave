@@ -5,10 +5,11 @@
 // speech_metadata.style. The transcript is NEVER prefixed with [...] blocks —
 // 3.8 treats input as verbatim and lite vocalizes them (rambling/static tail).
 //
-// Key: GOOGLE_GENERATIVE_AI_API_KEY (state/secrets.env → process.env), or the
-// Google key pool when one is configured. A key minted for a proxy/gateway
-// account is rejected by Google itself with API_KEY_INVALID, so the credential
-// must be Google's own.
+// Key: GOOGLE_GENERATIVE_AI_API_KEY (state/secrets.env → process.env) — the same
+// key the admin Voice panel's Gemini provider writes, and the same one the LLM
+// section's Google provider uses. A key minted for a proxy/gateway account is
+// rejected by Google itself with API_KEY_INVALID, so the credential must be
+// Google's own.
 //
 // Cue translation (splitCues) ports the sidecar's split_cues; the two must
 // stay in sync — scripts/gemini-tts.test.ts pins this copy's vectors, and any
@@ -32,15 +33,20 @@ const MULTI_VOICE_CAP = 2;
 const DEFAULT_VOICE = 'Puck';
 
 export function apiKey(): string {
-  // The pool FIRST, because the single-key admin field now saves a Google key
-  // as a one-entry POOL rather than to the singular variable. So a station
-  // configured through that field has no GOOGLE_GENERATIVE_AI_API_KEY at all,
-  // and reading only that variable left this engine permanently unavailable on
-  // exactly the configuration the pool exists to support — the two features
-  // silently cancel out. Falls back to the singular variable for a station
-  // that never configured a pool. `currentKey()` reads only the explicit pool,
-  // so a legacy single key is untouched.
-  return currentKey() || process.env.GOOGLE_GENERATIVE_AI_API_KEY || '';
+  // The single key, and only the single key.
+  //
+  // This used to read the pool first, on the grounds that the single-key admin
+  // field saved a Google key as a one-entry pool rather than to the singular
+  // variable — so a station configured through that field had no
+  // GOOGLE_GENERATIVE_AI_API_KEY at all and this engine was permanently
+  // unavailable. That field writes the singular variable again now, so the
+  // premise is gone, and what remained was the part nobody asked for: a VOICE
+  // engine silently changing which credential speaks the moment an LLM setting
+  // exists. Speaking and picking are separate decisions and should be
+  // configured separately. Letting the voice engine use the pool is its own
+  // change, with its own argument about what should happen on a station that
+  // has both.
+  return process.env.GOOGLE_GENERATIVE_AI_API_KEY || '';
 }
 
 export function isAvailable(): boolean {
@@ -95,7 +101,6 @@ function styleFor(voiceStyle: unknown, cueStyles: string[]): string {
 }
 
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
-import { currentKey } from '../util/google-key-pool.js';
 
 // 3 minutes: TTS renders are slow and retried per model; the caller's abort
 // (preview cancel, shutdown) still wins via signal composition.

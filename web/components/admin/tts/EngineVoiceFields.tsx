@@ -17,6 +17,7 @@ import {
 import { EngineSelector } from './EngineSelector';
 import { CloudProviderSelector } from './CloudProviderSelector';
 import { resolveKeyPresence } from './cloudProviderMeta';
+import { GEMINI_CLOUD_PROVIDER, engineCategory } from './engineMeta';
 import { VoicePreviewButton } from './VoicePreviewButton';
 import { VoicePicker, type VoicePickerGroup } from './VoicePicker';
 import { ENGINES, INHERIT_ENGINE, PERSONA_ENGINES, type EngineAvailability } from './engineMeta';
@@ -177,8 +178,15 @@ export function EngineVoiceFields({
   const pocketTtsVoices = data?.tts?.pocketTtsVoices || [];
   // Mirrors the controller's TTS_CLOUD_PROVIDERS, so a payload predating the
   // field still offers every provider the server accepts.
-  const cloudProviders = data?.tts?.cloudProviders
-    || ['openai', 'elevenlabs', 'fish-audio', 'openai-compatible'];
+  // Gemini is appended here rather than served by the controller: it is not a
+  // cloud provider, so it never appears in tts.cloudProviders.
+  const cloudProviders = [...new Set([
+    ...(data?.tts?.cloudProviders || ['openai', 'elevenlabs', 'fish-audio', 'openai-compatible']),
+    GEMINI_CLOUD_PROVIDER,
+  ])];
+  // Chosen from the provider grid below but stored as its own engine id. While
+  // the slot inherits, value.engine is the sentinel, so this is simply false.
+  const geminiSelected = value.engine === GEMINI_CLOUD_PROVIDER;
 
   // Every slot uses the station-wide server, so no base URL is sent and the
   // server falls back to the saved one. ElevenLabs and Fish discovery is gated
@@ -256,7 +264,9 @@ export function EngineVoiceFields({
       <div className="field mb-4">
         <Label>Engine</Label>
         <EngineSelector
-          value={value.engine}
+          // Gemini is a Cloud provider, so it highlights the Cloud card rather
+          // than disappearing from the grid entirely.
+          value={engineCategory(value.engine)}
           engineIds={allowInherit ? PERSONA_ENGINE_IDS : ENGINE_IDS}
           available={selectorAvailable}
           showStatusHint={!cloudAlerted}
@@ -459,7 +469,7 @@ export function EngineVoiceFields({
         );
       })()}
 
-      {voiceEngine === 'gemini' && (() => {
+      {geminiSelected && (() => {
         const geminiAvail = data?.tts?.available?.gemini;
         const cur = value.voice.trim();
         const listed = GEMINI_PREBUILT_VOICES.some(v => v.id.toLowerCase() === cur.toLowerCase());
@@ -518,7 +528,7 @@ export function EngineVoiceFields({
         );
       })()}
 
-      {value.engine === 'cloud' && (() => {
+      {(value.engine === 'cloud' || geminiSelected) && (() => {
         const isCompat = cloudProvider === 'openai-compatible';
         const voice = value.voice.trim();
         const isPreset = isKnownCloudVoice(cloudProvider, discoveredVoices, voice);
@@ -540,19 +550,29 @@ export function EngineVoiceFields({
               <div className="field">
                 <Label>Cloud provider</Label>
                 <CloudProviderSelector
-                  value={value.cloudProvider}
+                  value={geminiSelected ? GEMINI_CLOUD_PROVIDER : value.cloudProvider}
                   providerIds={cloudProviders}
                   availability={{
                     cloudByProvider: resolveKeyPresence(
                       cloudProviders, data?.tts?.available?.cloudByProvider, data?.env,
                     ),
+                    // Non-boolean stays undefined so the badge reads "unknown"
+                    // rather than claiming no key before the controller answered.
+                    gemini: typeof data?.tts?.available?.gemini === 'boolean'
+                      ? data.tts.available.gemini : undefined,
                   }}
                   onChange={v => {
+                    // Gemini keeps its own engine id and takes no cloudProvider —
+                    // cloudTts never sees it — so it writes engine, not provider.
+                    if (v === GEMINI_CLOUD_PROVIDER) {
+                      onChange({ engine: GEMINI_CLOUD_PROVIDER, voice: '' });
+                      return;
+                    }
                     // Switching provider invalidates the old voice id.
                     // openai-compatible has no curated voices, so blank lets
                     // the operator pick from the new server's discovered list.
                     const next = CLOUD_VOICES[v as keyof typeof CLOUD_VOICES]?.[0]?.id || '';
-                    onChange({ cloudProvider: v, voice: next });
+                    onChange({ cloudProvider: v, engine: 'cloud', voice: next });
                   }}
                   enableHint={!cloudAlerted}
                   hint={isCompat

@@ -16,6 +16,11 @@ export const CLOUD_PROVIDERS: CloudProviderMeta[] = [
   { id: 'elevenlabs', label: 'ElevenLabs', blurb: 'Most natural · your library' },
   { id: 'fish-audio', label: 'Fish Audio', blurb: 'Expressive · performance cues' },
   { id: 'openai-compatible', label: 'OpenAI-compatible', blurb: 'Your own server · no key' },
+  // Google TTS direct. Not a controller-side cloud provider — the dispatcher
+  // resolves it as its own engine — so its badge reads the engine's
+  // availability rather than cloudByProvider. Shares one key with the LLM
+  // section's Google provider, which is what the blurb tells the operator.
+  { id: 'gemini', label: 'Gemini', blurb: 'Google TTS direct · same key as the LLM' },
 ];
 
 export const CLOUD_PROVIDER_META: Record<string, CloudProviderMeta> = Object.fromEntries(
@@ -90,6 +95,9 @@ export interface CloudProviderAvailability {
   // caller can't see it (the persona slot reads the station's saved value), and
   // that gap is why the state has an explicit 'unknown'.
   compatBaseUrlSet?: boolean;
+  // SettingsResponse.tts.available.gemini — the engine flag, read for the Gemini
+  // card because Gemini is an engine wearing a provider's clothes.
+  gemini?: boolean;
 }
 
 export interface CloudProviderStatusOpts {
@@ -118,6 +126,20 @@ export function cloudProviderStatus(
           label: 'no server', tone: 'warn', state: 'off',
           hint: { reason: 'No base URL is set for your OpenAI-compatible server', action: 'enter its /v1 URL below' },
         };
+  }
+  if (id === 'gemini') {
+    // Gemini is an engine, not a cloud provider, so it never appears in
+    // cloudByProvider. Its key is the LLM section's Google key, and the
+    // controller already reports whether that engine can speak.
+    if (a.gemini === undefined) return { label: '', tone: 'ok', state: 'unknown' };
+    if (a.gemini) return { label: 'key set', tone: 'ok', state: 'ready' };
+    return {
+      label: 'no key', tone: 'warn', state: 'off',
+      hint: {
+        reason: 'No Google API key is configured for Gemini',
+        action: opts.keyAction || 'add it in Settings → Voice',
+      },
+    };
   }
   const configured = a.cloudByProvider?.[id];
   if (configured === undefined) return { label: '', tone: 'ok', state: 'unknown' };
