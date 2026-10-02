@@ -100,6 +100,7 @@ export interface TtsForm {
   chatterbox: { referenceVoice: string };
   pocketTts: { voice: string };
   cloud: CloudTtsCfg;
+  gemini: { model: string; voice: string };
   remote: { url: string };
   // Keyed by engine id (note the hyphen in `pocket-tts`). Always carries all 6
   // known engines; 0 = unity.
@@ -510,6 +511,7 @@ export interface SettingsData {
       // The saved shape also carries the redacted key sentinels ('set' when a
       // key is on file, '' otherwise) — GET /settings never returns raw keys.
       cloud?: Partial<CloudTtsCfg> & { apiKey?: string; compatApiKey?: string };
+      gemini?: { model?: string; voice?: string };
       remote?: { url?: string };
       gainDb?: Record<string, number>;
       speed?: Record<string, number>;

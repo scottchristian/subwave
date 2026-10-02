@@ -32,6 +32,8 @@ import { isValidTimezone, setStationTimezone } from './time.js';
 import {
   CHATTERBOX_VOICE_RE,
   DEFAULT_DJ_PROMPT_TEMPLATE,
+  GEMINI_TTS_MODELS,
+  GEMINI_TTS_VOICES,
   DJ_HOUSE_RULES_MAX,
   DJ_PROMPT_LIMIT,
   DjPromptEntry,
@@ -818,6 +820,20 @@ export async function load() {
             || CHATTERBOX_VOICE_RE.test(stored.tts.pocketTts.voice))
             ? stored.tts.pocketTts.voice
             : DEFAULTS.tts.pocketTts.voice,
+      },
+      // Station-level Gemini choice. An empty `model` means "use the engine's
+      // fallback chain", which is what an install that never picked one wants —
+      // pinning it here would freeze the chain at whatever was newest today.
+      gemini: {
+        model:
+          typeof stored.tts?.gemini?.model === 'string' &&
+          (GEMINI_TTS_MODELS as readonly string[]).includes(stored.tts.gemini.model.trim())
+            ? stored.tts.gemini.model.trim()
+            : DEFAULTS.tts.gemini.model,
+        voice:
+          typeof stored.tts?.gemini?.voice === 'string' && stored.tts.gemini.voice.trim()
+            ? stored.tts.gemini.voice.trim()
+            : DEFAULTS.tts.gemini.voice,
       },
       cloud: {
         // Explicit boolean wins; otherwise an install that already had a saved
@@ -1785,6 +1801,27 @@ export async function update(patch) {
           );
         }
         next.tts.pocketTts.voice = v;
+      }
+    }
+    if (t.gemini !== undefined) {
+      const gm = t.gemini || {};
+      if (gm.model !== undefined) {
+        // '' is meaningful: it means "walk the fallback chain".
+        const v = String(gm.model).trim();
+        if (v && !(GEMINI_TTS_MODELS as readonly string[]).includes(v)) {
+          throw new Error(`tts.gemini.model must be one of: ${GEMINI_TTS_MODELS.join(', ')}`);
+        }
+        next.tts.gemini.model = v;
+      }
+      if (gm.voice !== undefined) {
+        const v = String(gm.voice).trim();
+        // Rejected here rather than at speak time, where it would surface as a 400
+        // from inside the request instead of a form error.
+        if (!v) throw new Error('tts.gemini.voice must not be blank');
+        if (!(GEMINI_TTS_VOICES as readonly string[]).includes(v)) {
+          throw new Error(`tts.gemini.voice must be one of: ${GEMINI_TTS_VOICES.join(', ')}`);
+        }
+        next.tts.gemini.voice = v;
       }
     }
     if (t.cloud !== undefined) {

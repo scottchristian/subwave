@@ -114,6 +114,60 @@ export const PERSONA_TTS_ENGINES = [PERSONA_TTS_INHERIT, ...TTS_ENGINES] as cons
  */
 export const TTS_INHERITABLE_VOICE_ENGINES = ['piper', 'kokoro'] as const;
 
+// Gemini TTS models, cheapest/most reliable first — the dispatcher's fallback
+// order is this list, and the admin Voice panel offers it as a dropdown so the
+// operator is not stuck on whatever the chain happens to try first.
+//
+// Every id here was verified to return audio from
+// `models/<id>:generateContent` with `responseModalities: ['AUDIO']`. Models whose
+// name merely CONTAINS "tts" are not in this list: `gemini-2.5-flash-native-audio-*`
+// is the conversational-audio family and rejects the single-speaker speechConfig.
+export const GEMINI_TTS_MODELS = [
+  'gemini-3.8-flash-lite-tts',
+  'gemini-3.8-flash-tts',
+  'gemini-3.1-flash-tts-preview',
+  'gemini-2.5-flash-preview-tts',
+  'gemini-2.5-pro-preview-tts',
+] as const;
+
+// Google's prebuilt single-speaker voices, as accepted in
+// `speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName`. Each id was verified
+// against the live API. This is NOT the same set as `GET /v1beta/voices`, which
+// lists the Live/native-audio catalogue and omits several of these (Puck, Zephyr
+// and Kore among them) — so the endpoint is not a usable source for this list.
+export const GEMINI_TTS_VOICES = [
+  'Zephyr',
+  'Puck',
+  'Charon',
+  'Kore',
+  'Fenrir',
+  'Leda',
+  'Orus',
+  'Aoede',
+  'Callirrhoe',
+  'Autonoe',
+  'Enceladus',
+  'Iapetus',
+  'Umbriel',
+  'Algieba',
+  'Despina',
+  'Erinome',
+  'Algenib',
+  'Rasalgethi',
+  'Laomedeia',
+  'Achernar',
+  'Alnilam',
+  'Schedar',
+  'Gacrux',
+  'Pulcherrima',
+  'Achird',
+  'Zubenelgenubi',
+  'Vindemiatrix',
+  'Sadachbia',
+  'Sadaltager',
+  'Sulafat',
+] as const;
+
 export const TTS_CLOUD_PROVIDERS = [
   'openai',
   'elevenlabs',

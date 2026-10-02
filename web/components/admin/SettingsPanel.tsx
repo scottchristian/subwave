@@ -495,6 +495,12 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
             ? v.tts.cloud.compatParams.map(p => ({ key: String(p?.key ?? ''), value: String(p?.value ?? '') }))
             : [],
         },
+        // Absent block = the engine's own defaults, matching the controller's
+        // coercion: an empty model means "walk the fallback chain".
+        gemini: {
+          model: v.tts?.gemini?.model ?? '',
+          voice: v.tts?.gemini?.voice ?? 'Puck',
+        },
         remote: { url: v.tts?.remote?.url ?? '' },
         // Per-engine voice level (dB), keyed by engine id — `pocket-tts` (hyphen).
         gainDb: {

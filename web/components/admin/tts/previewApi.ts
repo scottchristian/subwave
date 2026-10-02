@@ -11,6 +11,9 @@ export interface PreviewParams {
   cloudProvider?: string;
   // Unsaved model id so the sample uses the exact provider/tier selection.
   cloudModel?: string;
+  // Unsaved Gemini model — gemini is not a cloud provider, so it does not ride
+  // cloudModel. Blank means the engine's fallback chain.
+  geminiModel?: string;
   // Final rate multiplier to audition (server clamps to 0.5–2.0×).
   speed?: number;
   // Kokoro phonemizer language override (e.g. "en-gb", "ja").

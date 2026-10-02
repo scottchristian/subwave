@@ -367,6 +367,9 @@ export const DEFAULTS = {
     },
     // Self-hosted TTS endpoint over HTTP (POST /speak → audio body, gated on a
     // /health probe) — the TTS equivalent of the LLM's custom base URL.
+    // Used when an engine resolves to 'gemini' and no persona names a voice.
+    // `model: ''` means "try the engine's fallback chain" — the upgrade default.
+    gemini: { model: '', voice: 'Puck' },
     remote: { url: '' },
     // Per-engine trim (dB) applied via liq_amplify on every spoken segment, to
     // level the loudness gap between engines. Stacks with each persona's own

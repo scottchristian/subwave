@@ -25,6 +25,8 @@ import {
   DJ_PROMPT_TEXT_MAX as DJ_PROMPT_TEXT_MAX_VALUE,
   DJ_PROMPT_TEXT_MIN as DJ_PROMPT_TEXT_MIN_VALUE,
   PERSONA_AVATAR_FILENAME_RE,
+  GEMINI_TTS_MODELS as GEMINI_TTS_MODEL_VALUES,
+  GEMINI_TTS_VOICES as GEMINI_TTS_VOICE_VALUES,
   PERSONA_DIAL_NEUTRAL,
   PERSONA_FREQUENCIES,
   PERSONA_LIMIT as PERSONA_LIMIT_VALUE,
@@ -602,6 +604,10 @@ export function normalizeLlmProviderBaseUrls(
 // Cloud TTS vendors for the `cloud` engine. `openai-compatible` targets any
 // self-hosted speech server via `tts.cloud.baseUrl`.
 export const TTS_CLOUD_PROVIDERS: readonly string[] = TTS_CLOUD_PROVIDER_VALUES;
+// Gemini's model + voice vocabularies, re-exported under the plain names the rest
+// of the controller imports (mirroring TTS_CLOUD_PROVIDERS above).
+export const GEMINI_TTS_MODELS: readonly string[] = GEMINI_TTS_MODEL_VALUES;
+export const GEMINI_TTS_VOICES: readonly string[] = GEMINI_TTS_VOICE_VALUES;
 
 // Web-search backends. `duckduckgo` is free and keyless (useful only for
 // entity/definition queries); `tavily` and `brave` read SEARCH_API_KEY;

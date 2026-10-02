@@ -9,6 +9,7 @@ import { adminResponse } from '../../../lib/admin-query';
 import { useModelDiscovery } from '@/hooks/useModelDiscovery';
 import { useVoiceDiscovery } from '@/hooks/useVoiceDiscovery';
 import { CLOUD_VOICES, CLOUD_MODELS } from '../../../lib/cloudVoices';
+import { GEMINI_TTS_MODELS, GEMINI_TTS_VOICES } from '../../../lib/schemas.generated';
 import {
   buildCloudVoiceGroups, isKnownCloudVoice, providerSupportsDiscovery, CUSTOM_VOICE_ID,
 } from '../../../lib/cloudVoiceGroups';
@@ -676,6 +677,12 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
         kokoro: { voice: form.tts.kokoro?.voice, lang: form.kokoroLang },
         chatterbox: { referenceVoice: form.tts.chatterbox?.referenceVoice ?? '' },
         pocketTts: { voice: form.tts.pocketTts?.voice ?? 'alba' },
+        gemini: {
+          // '' is sent verbatim: it is the "walk the fallback chain" choice,
+          // not a blank field for the server to fill in.
+          model: form.tts.gemini?.model ?? '',
+          voice: form.tts.gemini?.voice ?? 'Puck',
+        },
         cloud: {
           enabled: true,
           provider: form.tts.cloud.provider,
@@ -761,6 +768,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
     kokoro?: { voice?: string; lang?: string };
     chatterbox?: { referenceVoice?: string };
     pocketTts?: { voice?: string };
+    gemini?: { model?: string; voice?: string };
     cloud?: SavedCloud;
     remote?: { url?: string };
     gainDb?: Record<string, number>;
@@ -772,6 +780,8 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
   const savedChatterboxVoice: string = savedTts.chatterbox?.referenceVoice || '';
   const savedPocketTtsVoice: string = savedTts.pocketTts?.voice || '';
   const savedCloud: SavedCloud = savedTts.cloud || {};
+  const savedGeminiModel: string = savedTts.gemini?.model || '';
+  const savedGeminiVoice: string = savedTts.gemini?.voice || 'Puck';
   const savedRemoteUrl: string = savedTts.remote?.url || '';
   const savedEngineLabel = engineLabelOf(savedEngine);
   const formEngineLabel = engineLabelOf(form.tts.defaultEngine);
@@ -816,6 +826,8 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
     || form.tts.cloud.temperature !== (savedCloud.temperature ?? FISH_TTS_DEFAULTS.temperature)
     || form.tts.cloud.topP !== (savedCloud.topP ?? FISH_TTS_DEFAULTS.topP)
     || form.tts.cloud.latency !== (savedCloud.latency ?? FISH_TTS_DEFAULTS.latency)
+    || (form.tts.gemini?.model || '').trim() !== savedGeminiModel
+    || (form.tts.gemini?.voice || '') !== savedGeminiVoice
     || (form.tts.remote.url || '').trim() !== savedRemoteUrl
     || gainDirty
     || speedDirty;
@@ -1258,6 +1270,63 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
               </div>
               {geminiKeyTest && <KeyTestResult result={geminiKeyTest} />}
               <KeyStatus envVar="GOOGLE_GENERATIVE_AI_API_KEY" present={!!data.env?.['GOOGLE_GENERATIVE_AI_API_KEY']} />
+            </div>
+            <div className="field">
+              <Label>Model</Label>
+              <Select
+                value={form.tts.gemini?.model || ''}
+                onValueChange={model => setForm(f => ({
+                  ...f,
+                  tts: { ...f.tts, gemini: { ...f.tts.gemini, model } },
+                }))}
+              >
+                <SelectTrigger aria-label="Gemini TTS model" className="max-w-[360px]">
+                  <SelectValue placeholder="Automatic (fallback chain)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {/* Empty is a real choice, not "unset": it keeps the engine's own
+                        chain, so a model Google retires cannot leave the station mute. */}
+                    <SelectItem value="">Automatic (fallback chain)</SelectItem>
+                    {GEMINI_TTS_MODELS.map(m => (
+                      <SelectItem key={m} value={m}>{m}</SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <div className="field-hint">
+                Which Google TTS model renders speech. <strong>Automatic</strong> walks
+                the engine&apos;s own chain and retries the next model on failure, so it
+                keeps working if a model is rate-limited or withdrawn.
+              </div>
+            </div>
+            <div className="field">
+              <Label>Default voice</Label>
+              <VoicePicker
+                value={form.tts.gemini?.voice || ''}
+                onChange={voice => setForm(f => ({
+                  ...f,
+                  tts: { ...f.tts, gemini: { ...f.tts.gemini, voice } },
+                }))}
+                groups={[{
+                  label: 'Google prebuilt',
+                  voices: GEMINI_TTS_VOICES.map(v => ({ id: v, label: v })),
+                }]}
+                title="Gemini default voice"
+                placeholder="Select a voice"
+                preview={{
+                  engine: 'gemini',
+                  voice: form.tts.gemini?.voice || '',
+                  model: form.tts.gemini?.model || undefined,
+                  speed: form.tts.speed?.gemini ?? 1,
+                  adminFetch,
+                }}
+              />
+              <div className="field-hint">
+                The station-wide Gemini voice. A persona that names its own voice still
+                overrides this; one that leaves it blank inherits it, which is why this
+                is a floor and not a lock.
+              </div>
             </div>
             <TtsGainField engineId="gemini" form={form} setForm={setForm} />
             <TtsSpeedField engineId="gemini" form={form} setForm={setForm} />

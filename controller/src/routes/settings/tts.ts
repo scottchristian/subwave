@@ -38,6 +38,9 @@ router.post('/settings/tts/preview', requireAdmin, async (req, res) => {
       voice: typeof body.voice === 'string' ? body.voice : '',
       cloudProvider: typeof body.cloudProvider === 'string' ? body.cloudProvider : 'openai',
       cloudModel: typeof body.cloudModel === 'string' ? body.cloudModel : undefined,
+      // Unsaved Gemini model from the Voice panel. Blank is meaningful: it means
+      // "walk the engine's fallback chain", so it must not be defaulted away.
+      geminiModel: typeof body.geminiModel === 'string' ? body.geminiModel : undefined,
       speed: typeof body.speed === 'number' ? body.speed : undefined,
       lang: typeof body.lang === 'string' ? body.lang : undefined,
       language: typeof body.language === 'string' ? body.language : undefined,

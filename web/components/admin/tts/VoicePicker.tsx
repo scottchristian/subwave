@@ -44,6 +44,10 @@ export interface VoicePickerPreviewParams {
   engine: string;
   cloudProvider?: string;
   cloudModel?: string;
+  // Voice + model for engines that take them directly rather than through the
+  // cloud-provider indirection (gemini).
+  voice?: string;
+  model?: string;
   speed?: number;
   lang?: string;
   // Persona's free-text on-air language — the server renders the sample
@@ -126,6 +130,7 @@ export function VoicePicker({
         voice: voiceValue,
         cloudProvider: preview.cloudProvider,
         cloudModel: preview.cloudModel,
+        geminiModel: preview.model,
         speed: preview.speed,
         lang: preview.lang,
         language: preview.language,

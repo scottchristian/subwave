@@ -22,6 +22,14 @@ import { hasFfmpeg, transcodeAudio } from './audio-import.js';
 
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 const MODELS = ['gemini-3.8-flash-lite-tts', 'gemini-3.8-flash-tts'];
+
+/** The chain to walk: the operator's pick leads, the rest still stand behind it,
+ *  so pinning a retired or rate-limited model cannot leave the station mute. */
+function modelChain(chosen?: string): string[] {
+  const pick = (chosen || '').trim();
+  if (!pick || pick === MODELS[0]) return MODELS;
+  return [pick, ...MODELS.filter((m) => m !== pick)];
+}
 const VOICE_STYLE_MAX = 300;
 
 // Google's documented cap for speakers in ONE multi-speaker request.
@@ -106,11 +114,11 @@ import { fetchWithTimeout } from '../util/fetch-timeout.js';
 // (preview cancel, shutdown) still wins via signal composition.
 const REQUEST_TIMEOUT_MS = 180_000;
 
-async function postInteraction(body: unknown, signal?: AbortSignal): Promise<Buffer> {
+async function postInteraction(body: unknown, signal?: AbortSignal, modelPref?: string): Promise<Buffer> {
   const key = apiKey();
   if (!key) throw new Error('GOOGLE_GENERATIVE_AI_API_KEY not set');
   let lastErr: unknown = null;
-  for (const model of MODELS) {
+  for (const model of modelChain(modelPref)) {
     let res: Response;
     try {
       res = await fetchWithTimeout(`${API_BASE}/interactions`, {
@@ -183,7 +191,7 @@ async function applyRate(audio: Buffer, outPath: string, speedScale: unknown): P
 
 export async function speak(
   text: string,
-  { voice, style, outPath: customPath, signal, speedScale }: { voice?: string; style?: string; outPath?: string; signal?: AbortSignal; speedScale?: number } = {},
+  { voice, style, outPath: customPath, signal, speedScale, model }: { voice?: string; style?: string; model?: string; outPath?: string; signal?: AbortSignal; speedScale?: number } = {},
 ): Promise<string> {
   if (!text || !text.trim()) throw new Error('Empty TTS text');
   const { text: clean, styles } = splitCues(text);
@@ -203,7 +211,7 @@ export async function speak(
       speech_config: [{ voice: (voice || '').trim() || DEFAULT_VOICE }],
     },
   };
-  const audio = await postInteraction(body, signal);
+  const audio = await postInteraction(body, signal, model);
   const outPath = await outFile(customPath);
   await applyRate(audio, outPath, speedScale);
   return outPath;
@@ -234,7 +242,7 @@ export interface MultiLine {
  *  renders; that is a supported path, not an error state. */
 export async function speakMulti(
   lines: MultiLine[],
-  { outPath: customPath, signal, speedScale }: { outPath?: string; signal?: AbortSignal; speedScale?: number } = {},
+  { outPath: customPath, signal, speedScale, model }: { outPath?: string; signal?: AbortSignal; speedScale?: number; model?: string } = {},
 ): Promise<string> {
   if (!lines || lines.length === 0) throw new Error('Empty TTS lines');
   const seen = new Map<string, { speaker: string; voice: string }>();
@@ -275,7 +283,7 @@ export async function speakMulti(
       speech_config: { mode: 'conversational', speakers },
     },
   };
-  const audio = await postInteraction(body, signal);
+  const audio = await postInteraction(body, signal, model);
   const outPath = await outFile(customPath);
   // Unary audio is WAV (RIFF) — bytes go straight to disk, same as speak().
   await applyRate(audio, outPath, speedScale);

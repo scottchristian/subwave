@@ -23,6 +23,7 @@ interface VoicePreviewButtonProps {
   voice: string;
   cloudProvider?: string;
   cloudModel?: string;
+  geminiModel?: string;
   // Final saved-control rate to audition (server bounds-clamps to 0.5–2.0×);
   // current programme pacing is deliberately excluded from stable previews.
   speed?: number;
@@ -59,7 +60,7 @@ interface VoicePreviewButtonProps {
 type PreviewState = 'idle' | 'loading' | 'error';
 
 export function VoicePreviewButton({
-  engine, voice, cloudProvider, cloudModel, speed, lang, language, text, corrections, voiceSettings, fishSettings, style, adminFetch, disabled, className,
+  engine, voice, cloudProvider, cloudModel, geminiModel, speed, lang, language, text, corrections, voiceSettings, fishSettings, style, adminFetch, disabled, className,
 }: VoicePreviewButtonProps) {
   const [state, setState] = useState<PreviewState>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -83,7 +84,7 @@ export function VoicePreviewButton({
     discardSample();
     setState('idle');
     setError(null);
-  }, [engine, voice, cloudProvider, cloudModel, speed, lang, language, style, fishSettings?.temperature, fishSettings?.topP, fishSettings?.latency, discardSample]);
+  }, [engine, voice, cloudProvider, cloudModel, geminiModel, speed, lang, language, style, fishSettings?.temperature, fishSettings?.topP, fishSettings?.latency, discardSample]);
 
   const onClick = async () => {
     // Re-click while synthesizing cancels the request.
@@ -96,7 +97,7 @@ export function VoicePreviewButton({
     try {
       const res = await fetchPreviewSample(
         adminFetch,
-        { engine, voice, cloudProvider, cloudModel, speed, lang, language, text, corrections, voiceSettings, fishSettings, style },
+        { engine, voice, cloudProvider, cloudModel, geminiModel, speed, lang, language, text, corrections, voiceSettings, fishSettings, style },
         ac.signal,
       );
       if (ac.signal.aborted) return;

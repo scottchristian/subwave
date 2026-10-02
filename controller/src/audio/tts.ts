@@ -256,11 +256,26 @@ async function speakWith(engine: string, text: string, opts: any, personaTts: an
   if (engine === 'gemini') {
     // Direct Google TTS, no sidecar. Voice ids are prebuilt/custom/replicated
     // names; empty falls to the engine default. Style threads identically.
+    //
+    // The station's Voice-panel choice is the FLOOR under the persona's: a persona
+    // that names a voice wins, and one that doesn't inherits the station default —
+    // otherwise the panel's "default voice" would do nothing for exactly the
+    // personas that leave it alone.
+    const stationGemini = (settings.get().tts as any)?.gemini || {};
     const voice = (personaTts && personaTts.engine === 'gemini' && personaTts.voice)
       ? personaTts.voice
-      : undefined;
+      : (typeof stationGemini.voice === 'string' && stationGemini.voice.trim()
+        ? stationGemini.voice.trim()
+        : undefined);
     const style = typeof opts.voiceStyle === 'string' ? opts.voiceStyle : undefined;
-    return gemini.speak(text, { ...opts, voice, style });
+    // `opts.geminiModel` is the admin preview's UNSAVED choice and outranks the
+    // saved value, so "Play sample" auditions the dropdown rather than last save.
+    const modelPref = typeof opts.geminiModel === 'string' && opts.geminiModel.trim()
+      ? opts.geminiModel.trim()
+      : (typeof stationGemini.model === 'string' && stationGemini.model.trim()
+        ? stationGemini.model.trim()
+        : undefined);
+    return gemini.speak(text, { ...opts, voice, style, model: modelPref });
   }
   // piper `voice` is an .onnx filename; empty → the baked-in default voice.
   const voice = (personaTts && personaTts.engine === 'piper' && personaTts.voice)
@@ -278,12 +293,15 @@ const PREVIEW_TEXT_MAX = 200;
 const DEFAULT_PREVIEW_TEXT = "You're listening to SUB/WAVE. This is a voice preview.";
 
 export async function synthesizeSample(
-  { engine, voice = '', cloudProvider = 'openai', cloudModel, speed, lang, language, text, corrections, voiceSettings, fishSettings: requestedFishSettings, signal, style }: {
+  { engine, voice = '', cloudProvider = 'openai', cloudModel, geminiModel, speed, lang, language, text, corrections, voiceSettings, fishSettings: requestedFishSettings, signal, style }: {
     engine: string;
     voice?: string;
     cloudProvider?: string;
     // Unsaved model id so preview validates the exact provider/model choice.
     cloudModel?: string;
+    // Unsaved Gemini model — gemini is not a cloud provider, so it does not ride
+    // cloudModel. Blank means "the engine's fallback chain", a real choice.
+    geminiModel?: string;
     speed?: number;
     lang?: string;
     // Persona's free-text on-air language ("Turkish", "Türkçe"): picks the
@@ -363,7 +381,7 @@ export async function synthesizeSample(
         : settings.get().tts?.cloud?.latency || 'normal',
     };
   }
-  return speakWith(engine, sample, { speedScale: scale, language: '', soul: '', lang, cloudModel: previewCloudModel, cloudVoiceSettings, fishSettings, signal, voiceStyle: style }, personaTts);
+  return speakWith(engine, sample, { speedScale: scale, language: '', soul: '', lang, geminiModel, cloudModel: previewCloudModel, cloudVoiceSettings, fishSettings, signal, voiceStyle: style }, personaTts);
 }
 
 // Public entry point. Tries the configured engine; on failure falls back so the
