@@ -154,11 +154,22 @@ over.
 **The Gemini LLM leg** — the `google` provider, including its embeddings and the
 model list used by discovery.
 
-It does **not** yet cover Gemini TTS. The native Gemini TTS engine (#1718) is a
-separate PR, and it will read this same pool when it lands; until then a
-Gemini-TTS station keeps using its own single key. The pool module is already
-shaped for it — nothing about adding that engine's consumer requires a change
-here.
+**The native Gemini TTS engine** — it resolves its credential from this pool too.
+
+That second one is not automatic, and getting it wrong is silent. The TTS engine
+reads its key through `currentKey()` (the pool) before falling back to
+`GOOGLE_GENERATIVE_AI_API_KEY`. Reading only the singular variable breaks on
+exactly the station shape this page describes: because the single-key admin field
+saves to the *pool*, a station configured through that field has no
+`GOOGLE_GENERATIVE_AI_API_KEY` at all, and the engine reports itself unavailable
+while the pool sits there healthy. If you see the `gemini` engine "missing" on a
+pooled station, this is why.
+
+The two read the same credential but are not one mechanism: **only the LLM leg
+rotates on a `429`.** Speech does not — a failed TTS render falls back through the
+normal engine rescue chain instead, which is the designed behaviour for a voice
+that is mid-sentence. So a pool can keep the DJ talking past an exhausted LLM key
+without the speech path failing forward on its own.
 
 ## Headless / multi-station
 

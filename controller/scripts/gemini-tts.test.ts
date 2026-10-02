@@ -150,3 +150,44 @@ test('multi-speaker batching is capped at Google\'s two-speaker limit', async ()
     /prebuilt voices only/,
   );
 });
+
+// The two features this engine and the key pool share a credential with, and
+// the one way combining them silently breaks: the pool's admin field saves a
+// Google key as a one-entry POOL, so a station configured that way has no
+// GOOGLE_GENERATIVE_AI_API_KEY at all. An engine that read only the singular
+// variable was therefore unavailable on exactly the configuration the pool
+// exists to support — which looks like "the engine is broken", not "two
+// features collided".
+test('the engine resolves its key from the pool, then the singular variable', async () => {
+  const { apiKey, isAvailable } = await import('../src/audio/gemini.js');
+  const pool = await import('../src/util/google-key-pool.js');
+  const hadKeys = process.env.GOOGLE_GENERATIVE_AI_API_KEYS;
+  const hadSingle = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+  try {
+    // A pool-configured station: plural set, singular ABSENT.
+    delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+    process.env.GOOGLE_GENERATIVE_AI_API_KEYS = 'POOL_ONE,POOL_TWO';
+    pool.invalidatePool();
+    assert.equal(pool.poolConfigured(), true);
+    assert.equal(apiKey(), 'POOL_ONE', 'must use the pool head');
+    assert.equal(isAvailable(), true, 'the engine must be usable on a pooled station');
+
+    // Neither configured: unavailable, and no crash.
+    delete process.env.GOOGLE_GENERATIVE_AI_API_KEYS;
+    delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+    pool.invalidatePool();
+    assert.equal(apiKey(), '');
+    assert.equal(isAvailable(), false);
+
+    // A legacy single-key station that never configured a pool: unchanged.
+    process.env.GOOGLE_GENERATIVE_AI_API_KEY = 'LEGACY_SINGLE';
+    pool.invalidatePool();
+    assert.equal(apiKey(), 'LEGACY_SINGLE', 'a legacy station keeps its own key');
+  } finally {
+    if (hadKeys === undefined) delete process.env.GOOGLE_GENERATIVE_AI_API_KEYS;
+    else process.env.GOOGLE_GENERATIVE_AI_API_KEYS = hadKeys;
+    if (hadSingle === undefined) delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+    else process.env.GOOGLE_GENERATIVE_AI_API_KEY = hadSingle;
+    pool.invalidatePool();
+  }
+});

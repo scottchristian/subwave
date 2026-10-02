@@ -16,7 +16,6 @@ import { ProviderSelector } from '../llm/ProviderSelector';
 import { ModelCombobox } from '../llm/ModelCombobox';
 import { LLM_ENV_VARS, llmProviderLabel } from '../llm/providerMeta';
 import { GoogleKeyPoolEditor, type GooglePoolState } from './GoogleKeyPoolEditor';
-import { useGoogleKeyField } from '@/lib/adminView';
 import { Advanced } from './section-chrome';
 import {
   SectionHeader, SaveBar, KeyStatus, KeyTestResult, KEY_HINTS,
@@ -221,27 +220,20 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
   // reported as saved, and then never read by anything.
   const googlePoolCount =
     (data.env?.GOOGLE_KEY_POOL as GooglePoolState | undefined)?.count ?? 0;
-  // Two depths on ONE credential: a single field, or the full pool. The hook is
-  // called here rather than inside the render IIFE below because that is a plain
-  // callback, not a component.
-  const [googleDepth, setGoogleDepth] = useGoogleKeyField(googlePoolCount);
-  const showPool = googleDepth === 'pool';
 
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
-    // The single field and the pool editor are two depths on ONE credential, so
-    // the shallow view writes the same store the deep one does. Google is saved
-    // as a one-key pool rather than to the legacy singular variable — otherwise
-    // the two surfaces would write different keys, and the field would be
-    // ignored the moment a pool existed.
-    const target = envVar === 'GOOGLE_GENERATIVE_AI_API_KEY'
-      ? 'GOOGLE_GENERATIVE_AI_API_KEYS'
-      : envVar;
+    // Google saves to the LEGACY singular variable, and the pool is a separate
+    // thing that takes precedence while it exists. That is what makes "one key"
+    // and "a pool" two states rather than one: if this field wrote the pool,
+    // removing every key and then typing one here would re-activate the pool and
+    // disable the very field being typed into, so a single key could never be
+    // configured at all.
     try {
       const r = await adminResponse(adminFetch, '/settings/secrets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ [target]: value.trim() }),
+        body: JSON.stringify({ [envVar]: value.trim() }),
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({})) as { error?: string };
@@ -353,8 +345,6 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         budgetSoftPct: form.llm.budgetSoftPct,
         exemptRequests: form.llm.exemptRequests,
         maxOutputTokens: form.llm.maxOutputTokens,
-        banterPrompt: form.llm.banterPrompt,
-        listenerPrompt: form.llm.listenerPrompt,
         discoverySteps: form.llm.discoverySteps,
         geminiSafety: { ...form.llm.geminiSafety },
         ...(INLINE_KEY_PROVIDERS.includes(activeProvider) && compatKeyInput.trim()
@@ -639,68 +629,63 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           {LLM_ENV_VARS[form.llm.provider] && (() => {
             const keyVar = LLM_ENV_VARS[form.llm.provider]!;
             const isGoogle = keyVar === 'GOOGLE_GENERATIVE_AI_API_KEY';
-            const showGooglePool = isGoogle && showPool;
+            // A configured pool IS the Google credential, so the single-key
+            // field is shown but inert while one exists. Visible-and-disabled
+            // rather than hidden: an operator who cannot see the field cannot
+            // tell whether their key was replaced or is merely parked, and the
+            // obvious question ("where did my single key go?") deserves an
+            // answer on screen instead of in a doc.
+            const poolActive = isGoogle && googlePoolCount > 0;
             return (
               <>
                 <div className="field">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <Label>
-                      {isGoogle && showGooglePool
-                        ? 'Google (Gemini) API keys'
-                        : `${llmProviderLabel(form.llm.provider)} API key`}
-                    </Label>
-                    {isGoogle && (
-                      <button
-                        type="button"
-                        onClick={() => setGoogleDepth(showGooglePool ? 'single' : 'pool')}
-                        className="inline-flex cursor-pointer items-center text-[11px] text-muted underline-offset-2 transition-colors hover:text-ink focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
-                      >
-                        {showGooglePool ? 'Use a single key' : 'Manage several keys'}
-                      </button>
+                  <Label>{`${llmProviderLabel(form.llm.provider)} API key`}</Label>
+
+                  <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
+                    <Input
+                      type="password"
+                      autoComplete="off"
+                      value={primaryKeyInput}
+                      disabled={poolActive}
+                      placeholder={poolActive || data.env?.[keyVar] ? '\u2022\u2022\u2022\u2022\u2022\u2022 (on file)' : (KEY_HINTS[keyVar] ?? '')}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => setPrimaryKeyInput(e.target.value)}
+                      className="max-w-[360px] disabled:cursor-not-allowed disabled:opacity-50"
+                    />
+                    <Btn
+                      onClick={() => testKey(keyVar, primaryKeyInput, setPrimaryKeyTesting, setPrimaryKeyTest, () => setPrimaryKeyInput(''))}
+                      disabled={poolActive || primaryKeyTesting || (!primaryKeyInput.trim() && !data.env?.[keyVar])}
+                    >
+                      {primaryKeyTesting ? 'Testing\u2026' : 'Test key'}
+                    </Btn>
+                  </div>
+                  <div className="field-hint">
+                    Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
+                    {poolActive && (
+                      <>
+                        {' '}
+                        <strong className="text-ink">Not used while a key pool is set up below</strong> — the pool
+                        is what the station calls Google with, and this key is ignored. Remove the pool to go back to a
+                        single key.
+                      </>
                     )}
                   </div>
-
-                  {/* Depth 1 — one credential, one field. */}
-                  {!showGooglePool && (
-                    <>
-                      <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
-                        <Input
-                          type="password"
-                          autoComplete="off"
-                          value={primaryKeyInput}
-                          placeholder={googlePoolCount > 0 || data.env?.[keyVar] ? '\u2022\u2022\u2022\u2022\u2022\u2022 (on file)' : (KEY_HINTS[keyVar] ?? '')}
-                          onChange={(e: ChangeEvent<HTMLInputElement>) => setPrimaryKeyInput(e.target.value)}
-                          className="max-w-[360px]"
-                        />
-                        <Btn
-                          onClick={() => testKey(keyVar, primaryKeyInput, setPrimaryKeyTesting, setPrimaryKeyTest, () => setPrimaryKeyInput(''))}
-                          disabled={primaryKeyTesting || (!primaryKeyInput.trim() && !data.env?.[keyVar])}
-                        >
-                          {primaryKeyTesting ? 'Testing\u2026' : 'Test key'}
-                        </Btn>
-                      </div>
-                      <div className="field-hint">
-                        Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
-                      </div>
-                    </>
-                  )}
-
-                  {keyVar === 'OPENAI_API_KEY' && (
-                    <div className="field-hint">
-                      This key is shared across LLM and Cloud TTS.
-                    </div>
-                  )}
-                  {/* Depth 2 — the same credential, fully. Rendered INSTEAD of
-                      the single field, never alongside it: two inputs writing
-                      one secret is the confusion this split removes. */}
-                  {showGooglePool && (
-                    <GoogleKeyPoolEditor
-                      pool={data.env?.GOOGLE_KEY_POOL as GooglePoolState | undefined}
-                      adminFetch={adminFetch}
-                      onChanged={refresh}
-                    />
-                  )}
                 </div>
+
+                {keyVar === 'OPENAI_API_KEY' && (
+                  <div className="field-hint">
+                    This key is shared across LLM and Cloud TTS.
+                  </div>
+                )}
+                {/* The pool editor sits BELOW the single-key field rather than
+                    replacing it, so the operator can see both and is told
+                    plainly which one is live. */}
+                {isGoogle && (
+                  <GoogleKeyPoolEditor
+                    pool={data.env?.GOOGLE_KEY_POOL as GooglePoolState | undefined}
+                    adminFetch={adminFetch}
+                    onChanged={refresh}
+                  />
+                )}
                 {primaryKeyTest && <KeyTestResult result={primaryKeyTest} />}
               </>
             );
@@ -758,47 +743,6 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                       : 'No models discovered. Type a model ID manually.'}
             </div>
           </div>
-
-          {form.llm.provider === 'google' && (
-          <div className="field">
-            <Label>Gemini safety filters</Label>
-            <div className="mt-2 flex flex-col gap-2">
-              {[
-                { id: 'harassment', label: 'Harassment' },
-                { id: 'hateSpeech', label: 'Hate Speech' },
-                { id: 'sexuallyExplicit', label: 'Sexually Explicit' },
-                { id: 'dangerousContent', label: 'Dangerous Content' },
-              ].map(c => (
-                <label key={c.id} className="flex cursor-pointer items-center gap-2 text-[13px] leading-[1.5] text-ink">
-                  <input
-                    type="checkbox"
-                    checked={!!form.llm.geminiSafety?.[c.id as keyof typeof form.llm.geminiSafety]}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                      setForm(f => ({
-                        ...f,
-                        llm: {
-                          ...f.llm,
-                          geminiSafety: {
-                            ...(f.llm.geminiSafety || { harassment: false, hateSpeech: false, sexuallyExplicit: false, dangerousContent: false }),
-                            [c.id]: e.target.checked
-                          }
-                        }
-                      }))
-                    }
-                    className="accent-[var(--accent)]"
-                  />
-                  <span>{c.label}</span>
-                </label>
-              ))}
-            </div>
-            <div className="field-hint mt-2">
-              Google-only content blocking, applied on the native <code>google</code> provider
-              leg. Check a category to have Gemini block it; uncheck to allow swearing or
-              sensitive topics. (The Gemini TTS sidecar always renders under Google defaults —
-              these flags don&apos;t reach it.) Other providers ignore them.
-            </div>
-          </div>
-          )}
 
           {primaryKeyVar && (
             <KeyStatus envVar={primaryKeyVar} present={!!data.env?.[primaryKeyVar]} />
@@ -1562,51 +1506,6 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             />
           </div>
         )}
-      </Card>
-
-      <Card title="Task Model Overrides" sub="route specific agent tasks to a different model">
-        <div className="grid gap-[18px]">
-          <div className="field-hint">
-            The tasks below default to using the primary model. To route a heavy task (like Banter) to a larger model while keeping the station running on a smaller, faster model (like Flash Lite), select an override model below. The overrides apply to the <strong>primary provider</strong> only.
-          </div>
-          {[
-            { id: 'generateBanter', label: 'Presenter Banter', desc: 'Multi-speaker dynamic conversation between two personas' },
-            { id: 'djAgentSegment', label: 'Script Generation', desc: 'Single-speaker scripts for news, weather, and deep-cuts' },
-            { id: 'djAgentPick', label: 'Track Selection', desc: 'The AI DJ picking the next track from the library' },
-            { id: 'djAgentRequest', label: 'Listener Requests', desc: 'Negotiation and fulfillment of incoming track requests' },
-            { id: 'matchRequest', label: 'Request Matcher', desc: 'Matching a requested song text against the local library' },
-            { id: 'identifyRequest', label: 'Search Identifier', desc: 'Searching the web to identify a vague request description' }
-          ].map(task => (
-            <div className="field" key={task.id}>
-              <Label>{task.label}</Label>
-              <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
-                {primaryDiscovery.models.length > 0 ? (
-                  <ModelCombobox
-                    models={primaryDiscovery.models}
-                    value={form.llm.modelOverrides?.[task.id] || ''}
-                    onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, modelOverrides: { ...(f.llm.modelOverrides || {}), [task.id]: v } } }))}
-                    placeholder="Use primary model"
-                  />
-                ) : (
-                  <Input
-                    value={form.llm.modelOverrides?.[task.id] || ''}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                      setForm(f => ({ ...f, llm: { ...f.llm, modelOverrides: { ...(f.llm.modelOverrides || {}), [task.id]: e.target.value } } }))
-                    }
-                    placeholder="Use primary model (or type model ID)"
-                    className="max-w-[360px]"
-                  />
-                )}
-                {!!form.llm.modelOverrides?.[task.id] && (
-                  <Btn sm onClick={() => setForm(f => ({ ...f, llm: { ...f.llm, modelOverrides: { ...(f.llm.modelOverrides || {}), [task.id]: '' } } }))}>
-                    Clear
-                  </Btn>
-                )}
-              </div>
-              <div className="field-hint">{task.desc}</div>
-            </div>
-          ))}
-        </div>
       </Card>
       </Advanced>
 

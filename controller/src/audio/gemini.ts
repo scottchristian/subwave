@@ -32,7 +32,15 @@ const MULTI_VOICE_CAP = 2;
 const DEFAULT_VOICE = 'Puck';
 
 export function apiKey(): string {
-  return process.env.GOOGLE_GENERATIVE_AI_API_KEY || '';
+  // The pool FIRST, because the single-key admin field now saves a Google key
+  // as a one-entry POOL rather than to the singular variable. So a station
+  // configured through that field has no GOOGLE_GENERATIVE_AI_API_KEY at all,
+  // and reading only that variable left this engine permanently unavailable on
+  // exactly the configuration the pool exists to support — the two features
+  // silently cancel out. Falls back to the singular variable for a station
+  // that never configured a pool. `currentKey()` reads only the explicit pool,
+  // so a legacy single key is untouched.
+  return currentKey() || process.env.GOOGLE_GENERATIVE_AI_API_KEY || '';
 }
 
 export function isAvailable(): boolean {
@@ -87,6 +95,7 @@ function styleFor(voiceStyle: unknown, cueStyles: string[]): string {
 }
 
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
+import { currentKey } from '../util/google-key-pool.js';
 
 // 3 minutes: TTS renders are slow and retried per model; the caller's abort
 // (preview cancel, shutdown) still wins via signal composition.
