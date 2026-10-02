@@ -101,9 +101,9 @@ def test_schema_modifications():
     code = os.system(schema_cmd + " > /dev/null 2>&1")
     print_result("Show schema has speakClock", code == 0, "Could not find speakClock in show.ts")
     
-    schema_cmd2 = "docker exec sub-wave-controller grep -i 'donateEnabled' /app/src/schemas/settings.ts"
-    code = os.system(schema_cmd2 + " > /dev/null 2>&1")
-    print_result("Settings schema has donateEnabled", code == 0, "Could not find donateEnabled in settings.ts")
+    # The donateEnabled/donateUrl settings and the player's Donate button were
+    # removed (donations moved to a separate app), so there is nothing left here
+    # to assert for them.
 
 if __name__ == "__main__":
     print("Starting Causeway FM Custom Modifications Verification...")

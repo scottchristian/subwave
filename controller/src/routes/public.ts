@@ -271,7 +271,6 @@ router.get('/now-playing', async (req, res) => {
       // too or they disagree with what was said (#418).
       timezone: getStationTimezone(),
       locale: stationSettings.locale,
-      donateUrl: stationSettings.donateEnabled ? stationSettings.donateUrl : null,
     });
   } catch (err) {
     publicError(res, '/now-playing', err);

@@ -663,14 +663,6 @@ export async function load() {
       typeof stored.stationDescription === 'string'
         ? stored.stationDescription.trim().slice(0, 200)
         : DEFAULTS.stationDescription,
-    donateEnabled:
-      typeof stored.donateEnabled === 'boolean'
-        ? stored.donateEnabled
-        : DEFAULTS.donateEnabled,
-    donateUrl:
-      typeof stored.donateUrl === 'string'
-        ? stored.donateUrl.trim().slice(0, 512)
-        : DEFAULTS.donateUrl,
     // Invalid stored zone (hand-edited file) falls back to Auto — the
     // station must never crash on a bad zone.
     timezone:
@@ -1517,18 +1509,6 @@ export async function update(patch) {
     next.stationDescription = parseSettingsPatchKey<string>(
       'stationDescription',
       patch.stationDescription,
-    );
-  }
-  if ('donateEnabled' in patch) {
-    next.donateEnabled = parseSettingsPatchKey<boolean>(
-      'donateEnabled',
-      patch.donateEnabled,
-    );
-  }
-  if ('donateUrl' in patch) {
-    next.donateUrl = parseSettingsPatchKey<string>(
-      'donateUrl',
-      patch.donateUrl,
     );
   }
   if ('timezone' in patch) {

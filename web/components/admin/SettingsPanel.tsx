@@ -407,8 +407,6 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
       },
       station: v.station ?? '',
       stationDescription: v.stationDescription ?? '',
-      donateEnabled: v.donateEnabled ?? false,
-      donateUrl: v.donateUrl ?? '',
       timezone: v.timezone ?? '',
       locale: normalizeStationLocale(v.locale),
       privacy: {

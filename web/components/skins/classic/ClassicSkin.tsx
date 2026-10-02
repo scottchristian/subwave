@@ -52,7 +52,7 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
   const client = useStationClient();
   const {
     nowPlaying, context, dj, activeShow, listeners, llmTokens,
-    state, session, trackStartedAt, timezone, locale, donateUrl,
+    state, session, trackStartedAt, timezone, locale,
   } = usePlayerFeed();
   const boothFeed = session.messages;
   const { audioRef, tunedIn, status, volume, muted, offline, signal } = usePlayerAudio();
@@ -209,7 +209,7 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
         duration={nowPlaying?.duration ?? 0}
       />
 
-      <DotRail counts={dotRailCounts} donateUrl={donateUrl} active={drawer} onSelect={setDrawer} />
+      <DotRail counts={dotRailCounts} active={drawer} onSelect={setDrawer} />
 
       <TransportBar
         tunedIn={tunedIn}

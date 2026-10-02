@@ -173,15 +173,15 @@ export function PlayerCoreProvider({ children }: { children: ReactNode }) {
   // into every feed consumer.
   const {
     nowPlaying, context, dj, activeShow, listeners, streamOnline,
-    llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale, donateUrl,
+    llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale,
   } = feed;
   const feedValue = useMemo<StationFeed>(
     () => ({
       nowPlaying, context, dj, activeShow, listeners, streamOnline,
-      llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale, donateUrl,
+      llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale,
     }),
     [nowPlaying, context, dj, activeShow, listeners, streamOnline,
-     llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale, donateUrl],
+     llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale],
   );
 
   const { latencyMs, quality } = signal;

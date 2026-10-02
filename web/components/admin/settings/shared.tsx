@@ -395,8 +395,6 @@ export interface FormState {
   loudness: LoudnessForm;
   station: string;
   stationDescription: string;
-  donateEnabled: boolean;
-  donateUrl: string;
   timezone: string;
   locale: StationLocale;
   kokoroLang: string;
@@ -483,8 +481,6 @@ export interface SettingsData {
     boundaryFadeMinTrackSeconds?: number;
     station?: string;
     stationDescription?: string;
-    donateEnabled?: boolean;
-    donateUrl?: string;
     timezone?: string;
     locale?: StationLocale;
     /** Absent on a settings.json predating the key — read it as false, which is

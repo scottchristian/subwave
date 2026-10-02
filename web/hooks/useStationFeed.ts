@@ -39,8 +39,6 @@ export interface StationFeed {
   /** Station IANA timezone, or null before the first poll. Render on-air
    *  timestamps in this zone so they match what the DJ speaks (issue #418). */
   timezone: string | null;
-  /** URL for the station's donation page, if enabled. */
-  donateUrl: string | null;
   locale: StationLocale;
 }
 
@@ -74,7 +72,6 @@ export function useStationFeed(): StationFeed {
   const [trackStartedAt, setTrackStartedAt] = useState<number | null>(null);
   const [opusEnabled, setOpusEnabled] = useState<boolean | null>(null);
   const [timezone, setTimezone] = useState<string | null>(null);
-  const [donateUrl, setDonateUrl] = useState<string | null>(null);
   const [locale, setLocale] = useState<StationLocale>('en-GB');
   const lastTrackKeyRef = useRef<string | null>(null);
   const offlinePollsRef = useRef(0);
@@ -185,7 +182,6 @@ export function useStationFeed(): StationFeed {
         }
         if (typeof npRes.llmTokens === 'number') setIfChanged<number | null>(setLlmTokens, npRes.llmTokens);
         if (typeof npRes.timezone === 'string' && npRes.timezone) setTimezone(npRes.timezone);
-        if (npRes.donateUrl !== undefined) setIfChanged<string | null>(setDonateUrl, npRes.donateUrl);
         if (npRes.locale === 'en-US' || npRes.locale === 'en-GB') setLocale(npRes.locale);
         setIfChanged(setState, stRes);
         if (seRes && Array.isArray(seRes.messages)) {
@@ -222,7 +218,6 @@ export function useStationFeed(): StationFeed {
     trackStartedAt,
     opusEnabled,
     timezone,
-    donateUrl,
     locale,
   };
 }

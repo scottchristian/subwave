@@ -408,12 +408,13 @@ Use this as the authoritative guide when resolving merge conflicts in Step 3c. E
 - `controller/src/broadcast/clock-policy.ts`: Modified `clockEnabled()` to read the new `show.speakClock` flag and default to false (disabling the time announcement) unless explicitly enabled on the active show.
 **Why:** Allows the station operator to flag specific shows for on-air teasing, and gives per-show control over whether the AI DJ reads the time of day.
 
-### Donate Button (Player UI)
-**What:** 
-- `controller/src/schemas/settings.ts`, `defaults.ts`, `patch-registry.ts`, `settings.ts`: Added `donateEnabled` (boolean) and `donateUrl` (string) schemas, defaults, and parsing logic.
-- `controller/src/routes/settings/core.ts` & `routes/public.ts`: Exposed the new fields to both the admin API and the public `/now-playing` listener API.
-- `web/components/admin/settings/StationSection.tsx` & `shared.tsx`: Added a "Donations" settings card to the UI.
-- `web/components/admin/settings/registry.ts`: Added `donateEnabled` and `donateUrl` to the `station` section's `formKeys` array so the settings panel detects unsaved changes and shows the Save bar.
-- `web/hooks/useStationFeed.ts` & `web/components/player/PlayerCore.tsx`: Added `donateUrl` to the listener feed context payload.
-- `web/components/skins/classic/DotRail.tsx`: Added a `HandCoins` "Donate" button between the Booth and Request tabs that opens the URL in a new tab when clicked.
-**Why:** Gives listeners an obvious, native button in the side rail to support the station on Patreon/BuyMeACoffee, without hardcoding the URL into the UI so the operator can change it at any time.
+### Donate Button (Player UI) — REMOVED
+**What was removed:**
+- `controller/src/schemas/settings.ts`, `defaults.ts`, `patch-registry.ts`, `settings.ts`: the `donateEnabled` (boolean) and `donateUrl` (string) schemas, defaults, and parsing logic.
+- `controller/src/routes/settings/core.ts` & `routes/public.ts`: the fields on the admin API and the public `/now-playing` listener payload.
+- `web/components/admin/settings/StationSection.tsx` & `shared.tsx`: the "Donations" settings card.
+- `web/components/admin/settings/registry.ts`, `SettingsPanel.tsx`: `donateEnabled`/`donateUrl` in the `station` section's `formKeys`.
+- `web/hooks/useStationFeed.ts` & `web/components/player/PlayerCore.tsx`: `donateUrl` in the listener feed context.
+- `web/components/skins/classic/DotRail.tsx`: the `HandCoins` "Donate" button between Booth and Request.
+**Why removed:** Donations moved to a separate standalone app. The station no longer carries the setting, the admin card, or the player button, and `/now-playing` no longer publishes a `donateUrl` field. Any donation link belongs in that app.
+**Note:** A `donateEnabled`/`donateUrl` pair still sitting in `state/settings.json` is ignored and dropped on the next settings write; it is harmless and needs no manual cleanup.

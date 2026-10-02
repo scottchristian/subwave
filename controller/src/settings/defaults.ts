@@ -156,10 +156,6 @@ export const DEFAULTS = {
   // describe itself differently depending on when it was opened (#1086). Empty =
   // unset, and the web app falls back to the tagline. Never enters the DJ prompt.
   stationDescription: '',
-  // Toggle for the listener-facing donation button.
-  donateEnabled: false,
-  // The external URL the donation button opens (e.g. buymeacoffee.com/...)
-  donateUrl: '',
   // IANA zone driving everything with local-time semantics (time-of-day moods,
   // schedule slots, hourly checks, festival dates). Empty = the container's TZ.
   // Applied live via time.ts setStationTimezone().
