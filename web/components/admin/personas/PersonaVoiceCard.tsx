@@ -16,9 +16,10 @@ import { Card } from '../ui';
 import { EngineVoiceFields, ENGINE_UNAVAILABLE } from '../tts/EngineVoiceFields';
 import { effectiveTts } from './helpers';
 import { Label } from '../../ui/label';
+import { TextareaField } from '@/lib/form-fields';
 import { VoiceMeter } from './VoiceMeter';
 import { cn } from '../../../lib/cn';
-import { composeTtsControlSpeeds } from '../../../lib/schemas.generated';
+import { composeTtsControlSpeeds, PERSONA_VOICE_STYLE_MAX } from '../../../lib/schemas.generated';
 
 interface PersonaVoiceCardProps {
   persona: Persona; // read-only: language (preview) + on-screen labels only
@@ -37,6 +38,10 @@ export function PersonaVoiceCard({
   const tts = field.value;
   const uid = useId();
   const aria = fieldAria(`${uid}-tts`, fieldState.error);
+  // Its own controller, one level ABOVE `tts`: `voiceStyle` is a sibling of the
+  // engine slot, not a member of it. Inside `tts` it would be erased by every
+  // EngineVoiceFields write (`{ ...tts, gainDb: v }` and friends).
+  const voiceStyle = useController({ control, name: `personas.${index}.voiceStyle` });
 
   const gain = tts.gainDb ?? 0;
   const gainLabel = !gain
@@ -51,6 +56,23 @@ export function PersonaVoiceCard({
   const resolvedEngine = resolved?.engine;
   const speedSupported =
     resolvedEngine !== 'chatterbox' && resolvedEngine !== 'pocket-tts';
+
+  // Which engines have a free-text channel a delivery directive can ride.
+  // Deliberately NOT the whole "supports a voice setting" set: ElevenLabs takes
+  // only an ISO language code and openai-compatible servers vary too much to
+  // hint at, so neither can be given a directive at all (deliveryHint in
+  // cloud-speech.ts). Gemini composes it into speech_metadata.style.
+  //
+  // The OpenAI half is model-gated inside deliveryHint — `tts-1`/`tts-1-hd`
+  // reject `instructions`, and a 400 drops the line to an English local
+  // fallback. The form can't see the model, so it offers the field for the
+  // cloud engine and lets the dispatcher decide; a persona on gpt-4o-tts works,
+  // one on tts-1 silently keeps its voice. The hint says so rather than the
+  // control pretending to be universal.
+  const cloudProvider = resolved?.cloudProvider;
+  const styleSupported = resolvedEngine === 'gemini'
+    || (resolvedEngine === 'cloud' && cloudProvider === 'openai');
+  const styleValue = voiceStyle.field.value ?? '';
   // Previews are deterministic auditions of the two saved controls. The live
   // dispatcher adds the current daypart/show factor later, at air time.
   const previewSpeed = composeTtsControlSpeeds(
@@ -75,6 +97,7 @@ export function PersonaVoiceCard({
             adminFetch={adminFetch}
             previewSpeed={previewSpeed}
             previewLanguage={persona.language}
+            previewVoiceStyle={styleValue}
             cloudIssue={cloudIssueText && (
               <>
                 <strong>This cloud voice won’t play.</strong> {cloudIssueText}{' '}
@@ -169,6 +192,43 @@ export function PersonaVoiceCard({
                 : <>Not supported by this engine; Piper, Kokoro, cloud and Remote honour speed.</>}
             </div>
           </div>
+
+          {/*
+            The delivery directive. Rendered ONLY for the engines with a
+            free-text channel (see styleSupported above), and the value is left
+            in place when it is hidden rather than cleared — switching engines
+            is a reversible experiment, and silently wiping what someone wrote
+            on the way to a dead end is the wrong default. That is also why it
+            lives outside the `tts` block.
+          */}
+          {/* Rendered through the shared bound component per web/CLAUDE.md: the
+            * `tts` block above is a bespoke composite control, which is the
+            * documented exception, but a plain textarea is not one of the five
+            * that justify dropping to raw `useController`. Binding it here also
+            * means `fieldAria` owns the labelling, so the hint below is reached
+            * through the description rather than a hand-rolled
+            * `aria-describedby` id that could drift from its element. */}
+          <TextareaField
+            control={control}
+            name={`personas.${index}.voiceStyle`}
+            label="How this persona speaks"
+            description={styleSupported
+              ? 'Free text describing HOW to read the line — accent, pace, tone. Distinct from Character, which describes who this persona is and also guides what the DJ writes. Gemini and OpenAI send this to the model on every line.'
+              : 'Only Gemini and OpenAI accept a written delivery instruction; this engine ignores it. The text is kept, so it comes back if you switch. For OpenAI it needs a gpt-4o-tts model — tts-1 rejects it.'}
+            placeholder="tired Australian dad, warm, unhurried"
+            maxLength={PERSONA_VOICE_STYLE_MAX}
+            rows={2}
+            disabled={!styleSupported}
+            className={cn('mt-4', !styleSupported && 'opacity-40')}
+          />
+          {/* The bound component already renders the hint as its description, so
+            * this div is only the CHARACTER COUNTER — the one thing the shared
+            * component has no slot for. */}
+          {styleSupported && (
+            <div className="field-hint text-right">
+              {styleValue.length}/{PERSONA_VOICE_STYLE_MAX}
+            </div>
+          )}
         </div>
       </div>
     </Card>
