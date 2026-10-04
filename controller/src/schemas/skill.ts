@@ -271,50 +271,20 @@ const skillCohostsSchema = z.preprocess(
 // persona.ts) because this module may import only zod — the mirror is one
 // flat file. scripts/skill-voice.test.ts pins them equal to the persona
 // originals, the same posture as the three tag-regex declarations.
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
 //
-<<<<<<< HEAD
-// ── MERGE NOTE: this list and PR #1718 (gemini TTS) must land together ─────
-// The gemini-TTS PR adds 'gemini' to persona TTS_ENGINES. The pin above makes
-// this list EQUAL to that one, so exactly one merge order is red:
-//
-//   • Merge #1718 first, then this one. Rebase on it and uncomment 'gemini'
-//     below. `npm test -- skill-voice` goes green with no other change.
-//
-//   • Merge this one first, then #1718. #1718 needs the same edit here; its
-//     branch already carries a note at TTS_ENGINES saying exactly that.
-//
-// Do NOT uncomment it while this branch is unmerged against a develop that has
-// no gemini engine: the pin compares against persona TTS_ENGINES, so it would
-// fail on a branch where neither engine exists. The entry belongs in whichever
-// PR merges second, and the failing test is the signal, not a bug to work
-// around — its message names the fix.
->>>>>>> 4ce9b57b (docs(skills): restore the merge-order note on the engine list)
-//
-// Why the two lists must match at all: a skill pins the SAME engine vocabulary
-// a persona does, so a skill must never become the one surface where a valid,
-// working engine is unreachable. That is why the pin is a deepEqual rather
-<<<<<<< HEAD
-// than a subset check. ADDING AN ENGINE means adding it HERE in the same change —
-// the pin in scripts/skill-voice.test.ts is what makes the omission fail loudly
-// rather than quietly leaving one surface behind.
-// ─────────────────────────────────────────────────────────────────────────
-=======
->>>>>>> 9ddfb986 (feat(skills): per-skill TTS voice override)
-=======
-// than a subset check.
-=======
 // Why the two lists must match at all: a skill pins the SAME engine vocabulary
 // a persona does, so a skill must never become the one surface where a valid,
 // working engine is unreachable. That is why the pin is a deepEqual rather
 // than a subset check. ADDING AN ENGINE means adding it HERE in the same change —
 // the pin in scripts/skill-voice.test.ts is what makes the omission fail loudly
 // rather than quietly leaving one surface behind.
->>>>>>> b676ee31 (docs(skills): make the voice override self-contained, and correct the CLAUDE.md note)
 // ─────────────────────────────────────────────────────────────────────────
->>>>>>> 4ce9b57b (docs(skills): restore the merge-order note on the engine list)
+// `gemini` joins because `TTS_ENGINES` already contains it: a skill pins the
+// same engine vocabulary a persona does, so leaving it off here would make the
+// skill surface the one place a working engine cannot be selected. The comment
+// above says to add an engine HERE in the same change, and the deepEqual in
+// scripts/skill-voice.test.ts is what makes the omission fail loudly — it did,
+// on the rebase that brought this branch level with develop.
 export const SKILL_VOICE_ENGINES = [
   'piper',
   'kokoro',
@@ -322,21 +292,7 @@ export const SKILL_VOICE_ENGINES = [
   'pocket-tts',
   'cloud',
   'remote',
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
   'gemini',
-=======
->>>>>>> 9ddfb986 (feat(skills): per-skill TTS voice override)
-=======
-  // 'gemini',  // ← uncomment when landing the gemini-TTS PR (#1718); merge note above
->>>>>>> c42bb240 (docs(skills): state the merge order against the gemini-TTS PR)
-=======
-  // 'gemini',  // ← uncomment when landing the gemini-TTS PR (#1718); see above
->>>>>>> 4ce9b57b (docs(skills): restore the merge-order note on the engine list)
-=======
->>>>>>> b676ee31 (docs(skills): make the voice override self-contained, and correct the CLAUDE.md note)
 ] as const;
 
 export const SKILL_VOICE_PROVIDERS = [
