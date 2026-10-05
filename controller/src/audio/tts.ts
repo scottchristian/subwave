@@ -82,7 +82,7 @@ function fallbackSlot(): RescueSlot | null {
 // A slot for an engine chosen by the system, not the operator: no voice
 // override, so the engine speaks with its own default.
 function plainSlot(engine: string): RescueSlot {
-  return { engine, personaTts: null };
+  return { engine, personaTts: null, stationDefault: true };
 }
 
 // What a render is aimed at: the engine, plus (for `cloud` only) the provider.
@@ -468,7 +468,13 @@ export async function speak(
   const primary = primarySlot.engine;
   // A pre-flight reroute onto the operator's configured fallback carries THAT
   // slot's voice; an ordinary resolve leaves the persona's own override.
-  const primaryPersonaTts = primarySlot.personaTts ?? personaTts;
+  // A station-default slot means "speak with the engine's own credentials", and
+  // reattaching the persona's override here is what defeated the same-engine
+  // cloud hop: `plainSlot('cloud')` carries `null`, `?? personaTts` cannot tell
+  // that apart from the configured-slot case, and the render went back to the
+  // cloud provider the availability probe had just rejected (#1719).
+  const primaryPersonaTts = primarySlot.personaTts
+    ?? (primarySlot.stationDefault ? null : personaTts);
   const primaryFellBack = rerouted(requested, personaTts, primary, primaryPersonaTts);
   // Engine-native bracket cues reach the expressive primary untouched; a
   // local/remote rescue would speak them literally, so sanitize only that.
@@ -656,7 +662,12 @@ export function describeRouting() {
       voice: voice || null,
       provider: provider || null,
       // Provider-aware like speak()'s: a cloud→cloud reroute is still a fallback.
-      fellBack: rerouted(requested, personaTts, engine, slot.personaTts ?? personaTts),
+      // Same station-default distinction as speak(): a hardcoded rung's `null`
+      // must not be backfilled with the persona's own override.
+      fellBack: rerouted(
+        requested, personaTts, engine,
+        slot.personaTts ?? (slot.stationDefault ? null : personaTts),
+      ),
       warning,
     },
     fallback: {

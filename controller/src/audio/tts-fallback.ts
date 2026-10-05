@@ -19,6 +19,18 @@ export function fallbackTextFor(requested: string, cloudCueFamily: string | null
 export interface RescueSlot {
   engine: string;
   personaTts: { engine: string; voice: string; cloudProvider: string } | null;
+  /**
+   * The caller must NOT substitute the persona's own override for this slot's
+   * `null`. Set by `plainSlot()`, where `null` means "the station default"
+   * rather than "nothing configured".
+   *
+   * Without it the two meanings of `null` are indistinguishable at the one place
+   * that resolves it: `speak()` does `primarySlot.personaTts ?? personaTts`, so
+   * a persona on an unconfigured cloud provider whose same-engine hop resolved
+   * to `plainSlot('cloud')` got its OWN dead provider reattached and the render
+   * went back to the provider the availability probe had just rejected (#1719).
+   */
+  stationDefault?: boolean;
 }
 
 export interface TtsTarget {
@@ -101,9 +113,13 @@ export function orderedFallbacks(
     : primary;
   const candidates: RescueSlot[] = [
     ...(configured ? [configured] : []),
+    // `stationDefault` for the same reason `plainSlot()` sets it: these are the
+    // hardcoded rungs, so their `null` means "engine's own credentials" and a
+    // caller must not backfill it with the persona's override.
     ...[defaultEngine, 'piper', 'kokoro'].map((engine) => ({
       engine: engine || '',
       personaTts: null,
+      stationDefault: true,
     })),
   ];
   const out: RescueSlot[] = [];
