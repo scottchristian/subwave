@@ -1,18 +1,6 @@
-// Embedding models — the library tagger uses text embeddings for
-// KNN-propagating moods (see music/embeddings.ts + music/tag-library.ts).
-// Provider follows `settings.llm` by default — same auth, same dependency
-// surface — but operator can override either provider or model via
-// `settings.embedding.{provider,model}`.
-//
-// Default model per provider (all chosen for the homelab/single-host use case):
-//   ollama / unknown    → nomic-embed-text                (768d, free, local)
-//   openai / compat     → text-embedding-3-small          (1536d, ~$0.02/1M)
-//   google              → text-embedding-004              (768d)
-//   openrouter          → openai/text-embedding-3-small   (OpenAI-compatible
-//                                                          embeddings endpoint)
-//   anthropic           → falls back to openai embeddings (Anthropic has no
-//                                                          first-party API as
-//                                                          of 2026-05)
+// Embeddings inherit LLM provider/auth unless settings.embedding overrides them.
+// Anthropic has no embedding endpoint here, so its default uses OpenAI.
+// Model defaults are declared below; see music/embeddings.ts and music/tag-library.ts.
 
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
@@ -28,9 +16,10 @@ const embedCache = new Map();
 function embeddingCfg() {
   const s: any = settings.get().embedding || {};
   const llm = llmCfg();
+  const provider = s.provider || llm.provider || 'ollama';
   return {
     enabled: s.enabled !== false,
-    provider: s.provider || llm.provider || 'ollama',
+    provider,
     model: s.model || '',
     // Key precedence: the saved settings field wins, then a dedicated
     // `EMBEDDING_API_KEY` env var (the env path most installs use -- keys live in
@@ -43,6 +32,8 @@ function embeddingCfg() {
     apiKey: s.apiKey || process.env.EMBEDDING_API_KEY || llm.apiKey || '',
     ollamaUrl: s.ollamaUrl || llm.ollamaUrl || '',
     baseUrl: s.baseUrl || llm.baseUrl || '',
+    headers: Object.keys(s.headers || {}).length ? s.headers
+      : provider === llm.provider ? (llm.headers || {}) : {},
   };
 }
 
@@ -151,6 +142,7 @@ export interface EmbeddingCfg {
   apiKey: string;
   ollamaUrl: string;
   baseUrl: string;
+  headers?: Record<string, string>;
 }
 
 export function resolveEmbeddingCfg(overrides: Partial<EmbeddingCfg> = {}): EmbeddingCfg {
@@ -164,6 +156,7 @@ export function resolveEmbeddingCfg(overrides: Partial<EmbeddingCfg> = {}): Embe
     apiKey: overrides.apiKey || base.apiKey,
     ollamaUrl: overrides.ollamaUrl || base.ollamaUrl,
     baseUrl: overrides.baseUrl || base.baseUrl,
+    headers: overrides.headers ?? base.headers,
   };
 }
 
@@ -208,6 +201,7 @@ export function buildEmbeddingModel(cfg: EmbeddingCfg) {
         baseURL,
         apiKey: cfg.apiKey || 'unused',
         name: cfg.provider,
+        ...(Object.keys(cfg.headers || {}).length ? { headers: cfg.headers } : {}),
       });
       return provider.textEmbeddingModel(id);
     }
@@ -273,7 +267,8 @@ export function buildEmbeddingModel(cfg: EmbeddingCfg) {
 export function embeddingModel() {
   const cfg = resolveEmbeddingCfg();
   const id = cfg.model || defaultEmbeddingModelFor(cfg.provider);
-  const sig = `embed|${cfg.provider}|${id}|${cfg.apiKey || ''}|${cfg.ollamaUrl}|${cfg.baseUrl}`;
+  const headerSig = Object.entries(cfg.headers || {}).sort(([a], [b]) => a.localeCompare(b));
+  const sig = `embed|${cfg.provider}|${id}|${cfg.apiKey || ''}|${cfg.ollamaUrl}|${cfg.baseUrl}|${JSON.stringify(headerSig)}`;
 
   const cached = embedCache.get(sig);
   if (cached) return cached;

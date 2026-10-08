@@ -1,6 +1,5 @@
-// TTS dispatcher: picks an engine per voice-kind, with a settings-driven
-// override and an automatic fallback if the chosen engine fails. Every caller
-// goes through here, never an engine module directly.
+// Resolve persona or station voices and fall back when synthesis fails.
+// All broadcast speech goes through this dispatcher.
 
 import * as piper from './piper.js';
 import * as kokoro from './kokoro.js';
@@ -22,7 +21,6 @@ import { resolvePersonaVoiceSlot } from './persona-engine.js';
 import { stripThinking } from '../llm/sdk.js';
 import * as settings from '../settings.js';
 import { recordTts } from '../stats.js';
-import { logEvent } from '../observability/events.js';
 import { energyForDaypart } from '../context.js';
 
 export const ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts', 'cloud', 'remote', 'gemini'];
@@ -46,17 +44,14 @@ function djPersonaTts(kind: string, persona?: any): any {
   return resolvePersonaVoiceSlot(slot, settings.get().tts);
 }
 
-// The engine asked for BEFORE resolveEngine()'s availability/key reroute, so a
-// resolve-time fallback shows in Stats as `fellBack` (#691).
-function requestedEngine(kind: string, personaTts: any): string {
+// Capture the requested engine before availability checks for fallback stats.
+function requestedEngine(personaTts: any): string {
   if (personaTts && ENGINES.includes(personaTts.engine)) return personaTts.engine;
   return settings.get().tts?.defaultEngine || 'piper';
 }
 
-// Pre-flight availability/key gate, in one predicate so resolveEngine() (the
-// primary) and fallbackChain() (the runtime rescue) agree on what "installed"
-// means. `cloudProvider` scopes the key check to the provider that would be
-// called. Piper is local, keyless and always present: the universal floor.
+// Primary and rescue slots share availability checks. Cloud keys belong to the
+// requested provider; Piper is the local fallback and always available.
 function engineUsable(engine: string, cloudProvider?: string | null): boolean {
   if (!ENGINES.includes(engine)) return false;
   if (engine === 'cloud') return cloud.isConfigured(cloudProvider ?? null);
@@ -68,8 +63,7 @@ function engineUsable(engine: string, cloudProvider?: string | null): boolean {
   return true;
 }
 
-// The persona's own cloud provider, but only when the persona is actually ON
-// the cloud engine — otherwise the global Cloud provider applies.
+// A provider override applies only to a cloud slot.
 function personaCloudProvider(personaTts: any): string | null {
   return (personaTts && personaTts.engine === 'cloud') ? (personaTts.cloudProvider ?? null) : null;
 }
@@ -80,14 +74,18 @@ function fallbackSlot(): RescueSlot | null {
   return configuredSlot(settings.get().tts?.fallback, ENGINES);
 }
 
-// A slot for an engine chosen by the system, not the operator: no voice
-// override, so the engine speaks with its own default.
+// Ordinary slots inherit the persona's voice.
 function plainSlot(engine: string): RescueSlot {
   return { engine, personaTts: null };
 }
 
-// What a render is aimed at: the engine, plus (for `cloud` only) the provider.
-// The station default is NOT substituted here; that is sameTtsTarget's job.
+// A reroute uses station credentials so it cannot retry the failed persona provider.
+// Ordinary plainSlot results retain the persona's voice (#1719).
+function stationSlot(engine: string): RescueSlot {
+  return { engine, personaTts: null, stationDefault: true };
+}
+
+// sameTtsTarget resolves an absent cloud provider to the station default.
 function ttsTarget(engine: string, personaTts: any): TtsTarget {
   return {
     engine,
@@ -95,7 +93,6 @@ function ttsTarget(engine: string, personaTts: any): TtsTarget {
   };
 }
 
-// The station's Cloud provider — what an unspecified cloud target resolves to.
 function defaultCloudProvider(): string | null {
   return settings.get().tts?.cloud?.provider ?? null;
 }
@@ -113,10 +110,8 @@ function rerouted(
   );
 }
 
-// Which engine — and which voice — speaks a segment of `kind`. Returns a slot
-// because a reroute can carry the operator's chosen fallback voice; an ordinary
-// resolve returns a null override so the persona's own voice applies.
-function resolveEngine(kind: string, personaTts: any): RescueSlot {
+// A reroute may carry a fallback voice. Ordinary slots retain the persona's voice.
+function resolveEngine(personaTts: any): RescueSlot {
   const tts = settings.get().tts || {};
   let chosen;
   if (personaTts && ENGINES.includes(personaTts.engine)) {
@@ -124,7 +119,7 @@ function resolveEngine(kind: string, personaTts: any): RescueSlot {
   } else {
     chosen = tts.defaultEngine || 'piper';   // jingle / fallback
   }
-  if (!ENGINES.includes(chosen)) return plainSlot('piper');
+  if (!ENGINES.includes(chosen)) return stationSlot('piper');
   // Known-unavailable engine: route to the operator's configured fallback if it
   // can speak, else their saved default engine, else Piper. The default engine
   // branch is deliberately NOT probed; the runtime chain in speak() catches it.
@@ -139,7 +134,7 @@ function resolveEngine(kind: string, personaTts: any): RescueSlot {
     ) {
       return configured;
     }
-    if (tts.defaultEngine && tts.defaultEngine !== chosen) return plainSlot(tts.defaultEngine);
+    if (tts.defaultEngine && tts.defaultEngine !== chosen) return stationSlot(tts.defaultEngine);
     // Same engine id as the unusable primary, which only a different cloud
     // provider can survive (#1345). Probed, unlike the branch above.
     if (
@@ -147,9 +142,9 @@ function resolveEngine(kind: string, personaTts: any): RescueSlot {
       && rerouted(tts.defaultEngine, null, chosen, personaTts)
       && engineUsable(tts.defaultEngine, null)
     ) {
-      return plainSlot(tts.defaultEngine);
+      return stationSlot(tts.defaultEngine);
     }
-    return plainSlot('piper');
+    return stationSlot('piper');
   }
   return plainSlot(chosen);
 }
@@ -175,7 +170,7 @@ function fallbackChain(primary: TtsTarget): RescueSlot[] {
 // RESOLVED engine so the gain matches whichever engine actually speaks.
 export function voiceGainDb(kind: string, persona?: any): number {
   const personaTts = djPersonaTts(kind, persona);
-  const { engine } = resolveEngine(kind, personaTts);
+  const { engine } = resolveEngine(personaTts);
   const tts: any = settings.get().tts || {};
   const engineGain = settings.clampTtsGain(tts.gainDb?.[engine]);
   const personaGain = personaTts ? settings.clampTtsGain(personaTts.gainDb) : 0;
@@ -192,7 +187,7 @@ export function voiceGainDb(kind: string, persona?: any): number {
 // ceiling (#962) in dj-agent.ts.
 export function speechPaceScale(kind: string, persona?: any, liveOverride?: number | null): number {
   const personaTts = djPersonaTts(kind, persona);
-  const { engine: primary } = resolveEngine(kind, personaTts);
+  const { engine: primary } = resolveEngine(personaTts);
   const ttsCfg: any = settings.get().tts || {};
   const engineSpeed = settings.clampTtsSpeed(ttsCfg.speed?.[primary]);
   const live = liveOverride != null
@@ -203,6 +198,31 @@ export function speechPaceScale(kind: string, persona?: any, liveOverride?: numb
   // Bounds-clamp but do NOT snap to the 0.05 grid: programme pacing is a
   // non-grid value. Snapping applies only to the stored engine/persona knobs.
   return settings.clampEffectiveTtsSpeed(engineSpeed * live);
+}
+
+// The operator's Gemini choice — model + voice — and the precedence that puts a
+// persona's own pick on top of it. Extracted because three call sites need it
+// (the single-speaker branch below, the admin preview, the multi-speaker
+// exchange) and a copy per site is how they end up disagreeing.
+//
+// Voice: a persona that names a voice wins, and one that doesn't inherits the
+// station default rather than the engine's own — otherwise the panel's "default
+// voice" would do nothing for exactly the personas that leave it alone, which is
+// most of them. This is what an `inherit` slot relies on: resolvePersonaVoiceSlot
+// hands it `engine: 'gemini', voice: ''`, and the floor fills that blank.
+//
+// Model: `opts.geminiModel` is the admin preview's UNSAVED choice and outranks
+// the saved station value, so "Play sample" doesn't audition last week's model
+// instead of the one in the dropdown.
+export function stationGeminiPick(opts: any, personaTts: any): { voice?: string; model?: string } {
+  const station = (settings.get().tts as any)?.gemini || {};
+  const voice = (personaTts?.engine === 'gemini' && personaTts.voice)
+    ? personaTts.voice
+    : (typeof station.voice === 'string' && station.voice.trim() ? station.voice.trim() : undefined);
+  const model = typeof opts?.geminiModel === 'string' && opts.geminiModel.trim()
+    ? opts.geminiModel.trim()
+    : (typeof station.model === 'string' && station.model.trim() ? station.model.trim() : undefined);
+  return { voice, model };
 }
 
 async function speakWith(engine: string, text: string, opts: any, personaTts: any) {
@@ -244,38 +264,18 @@ async function speakWith(engine: string, text: string, opts: any, personaTts: an
   }
   if (engine === 'remote') {
     // `voice` is forwarded as-is; the endpoint interprets it and owns its
-    // own defaults, so there is no global fallback voice here. `voiceStyle`
-    // rides the same way: the persona's delivery directive, or empty for the
-    // endpoint's built-in style.
+    // own defaults, so there is no global fallback voice here.
     const voice = (personaTts && personaTts.engine === 'remote' && personaTts.voice)
       ? personaTts.voice
       : undefined;
-    const style = typeof opts.voiceStyle === 'string' ? opts.voiceStyle : undefined;
-    return remoteTts.speak(text, { ...opts, voice, style });
+    return remoteTts.speak(text, { ...opts, voice });
   }
   if (engine === 'gemini') {
-    // Direct Google TTS, no sidecar. Voice ids are prebuilt/custom/replicated
-    // names; empty falls to the engine default. Style threads identically.
-    //
-    // The station's Voice-panel choice is the FLOOR under the persona's: a persona
-    // that names a voice wins, and one that doesn't inherits the station default —
-    // otherwise the panel's "default voice" would do nothing for exactly the
-    // personas that leave it alone.
-    const stationGemini = (settings.get().tts as any)?.gemini || {};
-    const voice = (personaTts && personaTts.engine === 'gemini' && personaTts.voice)
-      ? personaTts.voice
-      : (typeof stationGemini.voice === 'string' && stationGemini.voice.trim()
-        ? stationGemini.voice.trim()
-        : undefined);
+    // Direct Google TTS, no sidecar. Style threads identically to the other
+    // engines — the persona's `voiceStyle` is the delivery directive.
+    const { voice, model } = stationGeminiPick(opts, personaTts);
     const style = typeof opts.voiceStyle === 'string' ? opts.voiceStyle : undefined;
-    // `opts.geminiModel` is the admin preview's UNSAVED choice and outranks the
-    // saved value, so "Play sample" auditions the dropdown rather than last save.
-    const modelPref = typeof opts.geminiModel === 'string' && opts.geminiModel.trim()
-      ? opts.geminiModel.trim()
-      : (typeof stationGemini.model === 'string' && stationGemini.model.trim()
-        ? stationGemini.model.trim()
-        : undefined);
-    return gemini.speak(text, { ...opts, voice, style, model: modelPref });
+    return gemini.speak(text, { ...opts, voice, style, model });
   }
   // piper `voice` is an .onnx filename; empty → the baked-in default voice.
   const voice = (personaTts && personaTts.engine === 'piper' && personaTts.voice)
@@ -293,20 +293,21 @@ const PREVIEW_TEXT_MAX = 200;
 const DEFAULT_PREVIEW_TEXT = "You're listening to SUB/WAVE. This is a voice preview.";
 
 export async function synthesizeSample(
-  { engine, voice = '', cloudProvider = 'openai', cloudModel, geminiModel, speed, lang, language, text, corrections, voiceSettings, fishSettings: requestedFishSettings, signal, style }: {
+  { engine, voice = '', cloudProvider = 'openai', cloudModel, geminiModel, speed, lang, language, voiceStyle, text, corrections, voiceSettings, fishSettings: requestedFishSettings, signal }: {
     engine: string;
     voice?: string;
     cloudProvider?: string;
     // Unsaved model id so preview validates the exact provider/model choice.
     cloudModel?: string;
-    // Unsaved Gemini model — gemini is not a cloud provider, so it does not ride
-    // cloudModel. Blank means "the engine's fallback chain", a real choice.
+    // Same for Gemini — rides stationGeminiPick, which lets it outrank the
+    // saved model so the dropdown's UNSAVED choice is what you hear.
     geminiModel?: string;
     speed?: number;
     lang?: string;
     // Persona's free-text on-air language ("Turkish", "Türkçe"): picks the
     // sample sentence when no explicit `text` is given. Unknown → English.
     language?: string;
+    voiceStyle?: string;
     text?: string;
     // Unsaved corrections override (admin "Test corrections"), used instead of
     // settings.tts.corrections for this call. Sanitized through the same
@@ -326,9 +327,6 @@ export async function synthesizeSample(
       latency?: 'low' | 'normal' | 'balanced';
     };
     signal?: AbortSignal;
-    // Delivery directive to audition (persona voiceStyle). Only the remote
-    // engine reads it; empty means the endpoint's built-in style.
-    style?: string;
   },
 ): Promise<string> {
   if (!ENGINES.includes(engine)) throw new Error(`Unknown engine: ${engine}`);
@@ -338,7 +336,7 @@ export async function synthesizeSample(
   const activeCorrections = corrections !== undefined
     ? settings.normalizeTtsCorrections(corrections)
     : settings.get().tts?.corrections;
-  const sample = normalizeForSpeech(raw.slice(0, PREVIEW_TEXT_MAX), activeCorrections);
+  const sample = normalizeForSpeech(raw.slice(0, PREVIEW_TEXT_MAX), activeCorrections, language, engine);
   // `speed` is already the final preview multiplier. A persona preview can
   // compose two saved 0.05-grid controls into a non-grid rate (0.90 x 1.15 =
   // 1.035), so only bounds-clamp here; snapping again would diverge from air.
@@ -381,58 +379,46 @@ export async function synthesizeSample(
         : settings.get().tts?.cloud?.latency || 'normal',
     };
   }
-  return speakWith(engine, sample, { speedScale: scale, language: '', soul: '', lang, geminiModel, cloudModel: previewCloudModel, cloudVoiceSettings, fishSettings, signal, voiceStyle: style }, personaTts);
+  return speakWith(engine, sample, { speedScale: scale, language: language || '', soul: '', voiceStyle, lang, cloudModel: previewCloudModel, geminiModel, cloudVoiceSettings, fishSettings, signal }, personaTts);
 }
 
-// Public entry point. Tries the configured engine; on failure falls back so the
-// DJ never goes silent. Every call is timed into the TTS ring buffer (stats.js).
-// A whole exchange in ONE Gemini request. Two things make this safe to expose
-// separately from announceExchange's own loop:
-//
-//   • Rendering is the only thing batched. The caller still decides how to air
-//     it, so per-line session turns, per-speaker attribution, per-line gain and
-//     the handoff's "settle on the final line" rule all stay intact — a batch
-//     that collapsed N lines into one segment would lose every one of those.
-//   • It is strictly optional. Anything mixed, a 3rd distinct voice, a custom
-//     `voice_…` id, or any failure at all throws, and the caller renders
-//     per-line. Multi-speaker is an improvement in cadence, never a
-//     precondition for speaking.
+// Experimental conversational renderer for all-Gemini lines. The broadcast
+// queue uses speak() per line until batching preserves each speaker's gain,
+// attribution and live-edge marker. This helper alone cannot provide those.
 export async function speakExchange(
-  lines: { persona?: any; text: string }[],
-  { kind = 'banter', outPath, signal, speedScale }: {
-    kind?: string; outPath?: string; signal?: AbortSignal; speedScale?: number;
-  } = {},
+  lines: { persona: any; text: string }[],
+  { kind = 'banter', outPath }: { kind?: string; outPath?: string } = {},
 ): Promise<string> {
-  if (!lines || lines.length === 0) throw new Error('Empty TTS exchange');
   const resolved = lines.map((l) => {
-    const personaTts = djPersonaTts(kind, l.persona);
-    const slot = resolveEngine(kind, personaTts);
-    return { line: l, engine: slot.engine, personaTts: slot.personaTts ?? personaTts };
+    const personaTts = resolvePersonaVoiceSlot(l.persona?.tts || null, settings.get().tts);
+    return { line: l, engine: resolveEngine(personaTts).engine, personaTts };
   });
-  // All-gemini only: a mixed engine is two renderers, not one conversation.
-  if (!resolved.every((r) => r.engine === 'gemini')) {
-    throw new Error('speakExchange batches an all-gemini exchange only');
+  if (resolved.length === 0 || !resolved.every((r) => r.engine === 'gemini')) {
+    throw new Error('speakExchange only supports an all-gemini exchange');
   }
-  const out = resolved.map(({ line: l, personaTts }) => ({
-    text: scrubCjkForSpeech(
-      normalizeForSpeech(stripThinking(l.text || ''), settings.get().tts?.corrections),
-      String(personaFor(l.persona)?.language || '').trim(),
-    ),
-    // Only a persona that actually PINS gemini owns its voice; otherwise the
-    // line takes gemini's default, same rule as the single-line path.
-    voice: personaTts?.engine === 'gemini' && personaTts.voice ? personaTts.voice : undefined,
-    style: typeof l.persona?.voiceStyle === 'string' ? l.persona.voiceStyle : undefined,
-    speaker: String(l.persona?.name || '').trim() || undefined,
+  // Same floor as the single-speaker path, so the operator's Voice-panel pick
+  // governs an exchange too: a persona on gemini keeps its OWN voice, and
+  // anything else takes the station voice instead of the engine's hardcoded
+  // default. The model is station-level — every turn in one request shares it,
+  // so it is resolved once here rather than per line.
+  const { model } = stationGeminiPick({}, resolved[0].personaTts);
+  const geminiLines = resolved.map(({ line: l, personaTts }) => ({
+    text: normalizeForSpeech(stripThinking(l.text), settings.get().tts?.corrections, String(l.persona?.language || ''), 'gemini'),
+    voice: stationGeminiPick({}, personaTts).voice,
+    style: typeof (l.persona as any)?.voiceStyle === 'string' ? (l.persona as any).voiceStyle : undefined,
+    // Each speaker's own character, so a host and a guest don't come out of one
+    // render sounding like the same person. Composed per turn inside the engine.
+    soul: typeof (l.persona as any)?.soul === 'string' ? (l.persona as any).soul : undefined,
   }));
 
   const started = Date.now();
   try {
-    const result = await gemini.speakMulti(out, { outPath, signal, speedScale });
+    const result = await gemini.speakMulti(geminiLines, { outPath, model });
     if (typeof result === 'string') await applyEdgeFades(result);
-    const combined = out.map((l) => l.text).join(' ').slice(0, 240);
+    const combinedText = lines.map((l) => `${l.persona?.name || 'DJ'}: ${l.text}`).join('\n').slice(0, 240);
     recordTts({
-      kind, requested: 'gemini', chars: combined.length,
-      text: combined, persona: 'Multi-Speaker',
+      kind, requested: 'gemini', chars: combinedText.length,
+      text: combinedText, persona: 'Multi-Speaker',
       engine: 'gemini', fellBack: false,
       ok: true, ms: Date.now() - started, t: new Date().toISOString(),
     });
@@ -449,6 +435,8 @@ export async function speakExchange(
   }
 }
 
+// Public entry point. Tries the configured engine; on failure falls back so the
+// DJ never goes silent. Every call is timed into the TTS ring buffer (stats.js).
 export async function speak(
   text: string,
   { kind = 'default', outPath, speedScale, persona }: { kind?: string; outPath?: string; speedScale?: number; persona?: any } = {},
@@ -458,24 +446,31 @@ export async function speak(
   const language = GLOBAL_VOICE_KINDS.has(kind)
     ? ''
     : String(personaFor(persona)?.language || '').trim();
+  // `persona` overrides the effective persona for an outgoing handoff voice.
+  // Resolve the requested engine before normalization so only Gemini keeps
+  // its supported pause cues; fallbackTextFor still strips cues for rescues.
+  const personaTts = djPersonaTts(kind, persona);
+  const requested = requestedEngine(personaTts);
   // Scrub leaked reasoning at the single point every booth-bound string
   // converges (#949): a structured say/intro field can carry a <think> token
   // that the free-text generators' own stripThinking never sees. No-op on clean
   // text. Operator speech corrections are read live, so a saved rule applies to
   // the next spoken line with no restart.
-  const normalizedText = normalizeForSpeech(stripThinking(text), settings.get().tts?.corrections);
+  const normalizedText = normalizeForSpeech(stripThinking(text), settings.get().tts?.corrections, language, requested);
   const speakText = GLOBAL_VOICE_KINDS.has(kind)
     ? normalizedText
     : scrubCjkForSpeech(normalizedText, language);
-  // `persona` overrides the effective persona so the handoff mic-pass can voice
-  // the outgoing DJ after the hour has flipped.
-  const personaTts = djPersonaTts(kind, persona);
-  const requested = requestedEngine(kind, personaTts);
-  const primarySlot = resolveEngine(kind, personaTts);
+  const primarySlot = resolveEngine(personaTts);
   const primary = primarySlot.engine;
   // A pre-flight reroute onto the operator's configured fallback carries THAT
   // slot's voice; an ordinary resolve leaves the persona's own override.
-  const primaryPersonaTts = primarySlot.personaTts ?? personaTts;
+  // A station-default slot means "speak with the engine's own credentials", and
+  // reattaching the persona's override here is what defeated the same-engine
+  // cloud hop: `plainSlot('cloud')` carries `null`, `?? personaTts` cannot tell
+  // that apart from the configured-slot case, and the render went back to the
+  // cloud provider the availability probe had just rejected (#1719).
+  const primaryPersonaTts = primarySlot.personaTts
+    ?? (primarySlot.stationDefault ? null : personaTts);
   const primaryFellBack = rerouted(requested, personaTts, primary, primaryPersonaTts);
   // Engine-native bracket cues reach the expressive primary untouched; a
   // local/remote rescue would speak them literally, so sanitize only that.
@@ -487,15 +482,11 @@ export async function speak(
   const primaryText = primaryFellBack ? rescueText : speakText;
   // Persona soul rides to the cloud engine so delivery matches the writing
   // (#579), like `language` does for pronunciation (#558). DJ-voiced kinds only.
-  // Only cloud-speech.ts reads either; every other engine ignores them.
+  // Cloud and Gemini consume the character; other engines ignore it.
   const soul = GLOBAL_VOICE_KINDS.has(kind)
     ? ''
     : String(personaFor(persona)?.soul || '').trim();
-  // Delivery directive for the remote engine (accent, pace, energy). DJ-voiced
-  // kinds only; empty means the endpoint's built-in style for that voice.
-  const voiceStyle = GLOBAL_VOICE_KINDS.has(kind)
-    ? ''
-    : String((speakingPersona as any)?.voiceStyle || '').trim();
+  const voiceStyle = speakingPersona?.voiceStyle || '';
   const scale = speechPaceScale(kind, persona, speedScale);
   const started = Date.now();
   const chars = (speakText || '').length;
@@ -516,8 +507,6 @@ export async function speak(
       ...callBase, engine: primary, fellBack: primaryFellBack,
       ok: true, ms: Date.now() - started, t: new Date().toISOString(),
     });
-    logEvent('tts', { chars, engine: primary });
-
     return result;
   } catch (err) {
     // Primary passed the pre-flight gate but threw mid-render: walk the chain.
@@ -547,7 +536,6 @@ export async function speak(
           ...callBase, engine: fallback, fellBack: true,
           ok: true, ms: Date.now() - started, t: new Date().toISOString(),
         });
-        logEvent('tts', { chars: rescueText.length, engine: fallback });
         return result;
       } catch (err2) {
         lastErr = err2;
@@ -561,71 +549,6 @@ export async function speak(
       t: new Date().toISOString(),
     });
     throw lastErr;
-  }
-}
-
-// Attempt to speak an entire multi-voice exchange at once if all speakers
-// are configured to use the `remote` engine. Named `speakRemoteExchange`, not
-// `speakExchange`: the native-Gemini batching above owns the upstream name, and
-// two exports of one name is a redeclare error rather than an overload.
-// NOTE: the air path currently renders exchanges PER LINE (queue.ts), so
-// neither batcher is called; both are kept because batching is opt-in by
-// engine and either side may be switched back on. This is significantly faster
-// and allows the LLM to hear the full conversation flow (Gemini Multi-Speaker).
-// Throws if any line isn't using the remote engine (caller should fallback to per-line).
-export async function speakRemoteExchange(
-  lines: { persona: any; text: string }[],
-  { kind = 'banter', outPath }: { kind?: string; outPath?: string } = {},
-): Promise<string> {
-  const remoteLines: { text: string; voice?: string }[] = [];
-  
-  for (const l of lines) {
-    const personaTts = djPersonaTts(kind, l.persona);
-    const slot = resolveEngine(kind, personaTts);
-    if (slot.engine !== 'remote') {
-      throw new Error('speakRemoteExchange only supports the remote engine for all speakers');
-    }
-    
-    // We must pass the raw text and the persona voice
-    const speakText = scrubCjkForSpeech(
-      normalizeForSpeech(stripThinking(l.text), settings.get().tts?.corrections),
-      String(personaFor(l.persona)?.language || '').trim()
-    );
-    
-    const primaryPersonaTts = slot.personaTts ?? personaTts;
-    const voice = (primaryPersonaTts && primaryPersonaTts.engine === 'remote' && primaryPersonaTts.voice)
-      ? primaryPersonaTts.voice
-      : undefined;
-      
-    remoteLines.push({ text: speakText, voice });
-  }
-
-  const started = Date.now();
-  try {
-    const result = await remoteTts.speakMulti(remoteLines, { outPath });
-    if (typeof result === 'string') await applyEdgeFades(result);
-    
-    // Log a single aggregate entry in the TTS ring buffer
-    const combinedText = lines.map(l => `${l.persona?.name || 'DJ'}: ${l.text}`).join('\n').slice(0, 240);
-    recordTts({
-      kind, requested: 'remote', chars: combinedText.length,
-      text: combinedText, persona: 'Multi-Speaker',
-      engine: 'remote', fellBack: false,
-      ok: true, ms: Date.now() - started, t: new Date().toISOString(),
-    });
-    const totalChars = lines.reduce((acc, l) => acc + (l.text || '').length, 0);
-    logEvent('tts', { chars: totalChars, engine: 'remote' });
-    
-    return result;
-  } catch (err) {
-    recordTts({
-      kind, requested: 'remote', chars: 0,
-      text: 'Multi-speaker exchange failed', persona: 'Multi-Speaker',
-      engine: 'remote', fellBack: false,
-      ok: false, ms: Date.now() - started, error: (err as any).message,
-      t: new Date().toISOString(),
-    });
-    throw err;
   }
 }
 
@@ -679,7 +602,7 @@ export function describeRouting() {
   // fell back at all.
   const personaTts = resolvePersonaVoiceSlot(persona?.tts || null, tts);
   const requested = personaTts?.engine || tts.defaultEngine || 'piper';
-  const slot = resolveEngine('dj-speak', personaTts);   // any persona-voiced kind
+  const slot = resolveEngine(personaTts);
   const engine = slot.engine;
   let voice: string | null = null;
   let provider: string | null = null;
@@ -689,8 +612,14 @@ export function describeRouting() {
     voice = slot.personaTts.voice || null;
     provider = engine === 'cloud' ? (slot.personaTts.cloudProvider || null) : null;
   } else if (engine === 'cloud') {
-    voice = personaTts?.engine === 'cloud' ? personaTts.voice : tts.cloud?.voice;
-    provider = (personaTts?.engine === 'cloud' ? personaTts.cloudProvider : tts.cloud?.provider) as any;
+    // `personaCloud` has to respect stationDefault as well. speak() sends a
+    // station-default cloud hop with the STATION's credentials, so deriving the
+    // reported voice/provider from the persona here would have /debug naming the
+    // provider the availability probe just rejected while a different one
+    // actually speaks (#1793).
+    const personaCloud = personaTts?.engine === 'cloud' && !slot.stationDefault;
+    voice = personaCloud ? personaTts.voice : tts.cloud?.voice;
+    provider = (personaCloud ? personaTts.cloudProvider : tts.cloud?.provider) as any;
   } else if (engine === 'kokoro') {
     voice = (personaTts?.engine === 'kokoro' && personaTts.voice)
       ? personaTts.voice
@@ -709,8 +638,8 @@ export function describeRouting() {
     voice = (personaTts?.engine === 'piper' && personaTts.voice)
       ? personaTts.voice
       : null;
-  } else if (engine === 'remote' || engine === 'gemini') {
-    voice = (personaTts?.engine === engine && personaTts.voice)
+  } else if (engine === 'remote') {
+    voice = (personaTts?.engine === 'remote' && personaTts.voice)
       ? personaTts.voice
       : null;
   }
@@ -735,7 +664,12 @@ export function describeRouting() {
       voice: voice || null,
       provider: provider || null,
       // Provider-aware like speak()'s: a cloud→cloud reroute is still a fallback.
-      fellBack: rerouted(requested, personaTts, engine, slot.personaTts ?? personaTts),
+      // Same station-default distinction as speak(): a hardcoded rung's `null`
+      // must not be backfilled with the persona's own override.
+      fellBack: rerouted(
+        requested, personaTts, engine,
+        slot.personaTts ?? (slot.stationDefault ? null : personaTts),
+      ),
       warning,
     },
     fallback: {
@@ -749,6 +683,6 @@ export function describeRouting() {
         ? engineUsable(configured.engine, configured.personaTts?.cloudProvider ?? null)
         : false,
     },
-    jingle: { engine: resolveEngine('jingle', null).engine },
+    jingle: { engine: resolveEngine(null).engine },
   };
 }

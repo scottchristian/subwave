@@ -1,7 +1,4 @@
-// Shared client for POST /settings/tts/preview, used by VoicePreviewButton and
-// VoicePicker so both audition through the same request shape. The endpoint
-// bypasses the on-air persona AND the silent engine fallback, so an unavailable
-// engine returns a real error rather than quietly playing Piper. No React, no DOM.
+// Previews bypass persona selection and silent engine fallback, returning an error for unavailable engines.
 import type { AdminAuth } from '../../../lib/adminAuth';
 import { AdminResponseError, adminResponse } from '../../../lib/admin-query';
 
@@ -11,8 +8,8 @@ export interface PreviewParams {
   cloudProvider?: string;
   // Unsaved model id so the sample uses the exact provider/tier selection.
   cloudModel?: string;
-  // Unsaved Gemini model — gemini is not a cloud provider, so it does not ride
-  // cloudModel. Blank means the engine's fallback chain.
+  // Gemini's own model id, so an unsaved dropdown choice is what gets
+  // auditioned rather than the saved station model.
   geminiModel?: string;
   // Final rate multiplier to audition (server clamps to 0.5–2.0×).
   speed?: number;
@@ -21,12 +18,10 @@ export interface PreviewParams {
   // Free-text on-air language ("Turkish", "Türkçe"); the server renders the sample
   // sentence in it, falling back to English when it doesn't recognize it.
   language?: string;
+  voiceStyle?: string;
   // Explicit sample text, overriding both the default sentence and the
   // language-localized one. Truncated server-side at PREVIEW_TEXT_MAX (200).
   text?: string;
-  // Delivery directive to audition (persona voiceStyle). Only the remote
-  // engine reads it.
-  style?: string;
   // Unsaved corrections override (admin "Test corrections" button, Moods →
   // Speech tab) — tests the tab's CURRENT rows, saved or not.
   corrections?: { from: string; to: string }[];

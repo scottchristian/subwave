@@ -1,10 +1,4 @@
 'use client';
-// Searchable voice picker for the long engine voice lists, wrapping the vendored
-// ai-elements VoiceSelector (cmdk inside a Radix dialog). Controlled like the
-// <Select> it replaces: `value` in, `onChange(id)` out, nothing persists until the
-// surrounding form saves. With `preview` set every row can audition through
-// POST /settings/tts/preview; one sample plays at a time and closing the dialog
-// stops playback and revokes the object URL.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronsUpDown } from 'lucide-react';
 import type { AdminAuth } from '../../../lib/adminAuth';
@@ -44,18 +38,15 @@ export interface VoicePickerPreviewParams {
   engine: string;
   cloudProvider?: string;
   cloudModel?: string;
-  // Voice + model for engines that take them directly rather than through the
-  // cloud-provider indirection (gemini).
-  voice?: string;
-  model?: string;
+  // Gemini's own model id, so "Play sample" auditions the UNSAVED choice rather
+  // than the saved station model. Mirrors cloudModel above.
+  geminiModel?: string;
   speed?: number;
   lang?: string;
   // Persona's free-text on-air language — the server renders the sample
   // sentence in this language when it recognizes it.
   language?: string;
-  // Delivery directive to audition (persona voiceStyle). Only the remote
-  // and gemini engines read it.
-  style?: string;
+  voiceStyle?: string;
   fishSettings?: {
     temperature: number;
     topP: number;
@@ -130,11 +121,11 @@ export function VoicePicker({
         voice: voiceValue,
         cloudProvider: preview.cloudProvider,
         cloudModel: preview.cloudModel,
-        geminiModel: preview.model,
         speed: preview.speed,
         lang: preview.lang,
         language: preview.language,
-        style: preview.style,
+        voiceStyle: preview.voiceStyle,
+        geminiModel: preview.geminiModel,
         fishSettings: preview.fishSettings,
       }, ac.signal);
     } catch (e) {

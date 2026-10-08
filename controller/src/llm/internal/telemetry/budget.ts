@@ -1,82 +1,72 @@
-// Daily LLM token counter, TTS character counter, and peak listeners
-// stored durably in SQLite.
-import { getTelemetryDb, utcDay } from './db.js';
+// Count tokens by UTC day, matching events-*.jsonl; reset on the next read after midnight.
+// This module stores the count; broadcast/dj-budget.ts owns cap policy.
 
-function ensureTodayRow(): void {
-  const db = getTelemetryDb();
-  const day = utcDay();
-  db.prepare(`
-    INSERT INTO daily_stats (date, peak_listeners, llm_tokens, tts_chars)
-    VALUES (?, 0, 0, 0)
-    ON CONFLICT(date) DO NOTHING
-  `).run(day);
+import { readFile } from 'node:fs/promises';
+import { STATE_DIR } from '../../../config.js';
+
+function utcDay(): string {
+  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
 }
 
-// Add a call's token total to today's tally.
+let bucketDay = utcDay();
+let bucketTokens = 0;
+
+// Roll the bucket to today if the UTC date has advanced since the last touch.
+function rollIfNeeded(): void {
+  const today = utcDay();
+  if (today !== bucketDay) {
+    bucketDay = today;
+    bucketTokens = 0;
+  }
+}
+
+// Add a call's token total to today's tally. Called from log.ts record() for
+// every call that reports usage, failed ones included (issue #1195) — unlike
+// the lifetime counter beside it, which stays success-only. The provider bills
+// for a call that throws, so a cap that ignored them capped successful spend.
 export function addDailyUsage(tokens: number): void {
   if (!Number.isFinite(tokens) || tokens <= 0) return;
-  const db = getTelemetryDb();
-  const day = utcDay();
-  
-  db.prepare(`
-    INSERT INTO daily_stats (date, peak_listeners, llm_tokens, tts_chars)
-    VALUES (?, 0, ?, 0)
-    ON CONFLICT(date) DO UPDATE SET llm_tokens = llm_tokens + excluded.llm_tokens
-  `).run(day, tokens);
+  rollIfNeeded();
+  bucketTokens += tokens;
 }
 
-// Tokens spent so far today (UTC).
+// Tokens spent so far today (UTC). Reads 0 on a fresh day even with no add yet.
 export function dailyTokensUsed(): number {
-  ensureTodayRow();
-  const db = getTelemetryDb();
-  const row = db.prepare('SELECT llm_tokens FROM daily_stats WHERE date = ?').get(utcDay()) as any;
-  return row ? row.llm_tokens : 0;
+  rollIfNeeded();
+  return bucketTokens;
 }
 
-// Add a call's character count to today's TTS tally.
-export function addDailyTtsUsage(chars: number): void {
-  if (!Number.isFinite(chars) || chars <= 0) return;
-  const db = getTelemetryDb();
+// Seed today's tally from the durable event log on boot so a mid-day restart
+// doesn't reset the count (the in-memory tally above is otherwise lost). Sums
+// `usage.total` over today's `llm` events. Best-effort: a missing or unreadable
+// file (fresh install, no calls yet) leaves the tally at 0. Run once at
+// startup, before any new calls record — re-running would double-count.
+//
+// This filter must stay in lockstep with addDailyUsage's caller in log.ts: it
+// is a SECOND, independent copy of the same policy, and the two disagreeing is
+// silent. Screening `ok` here while log.ts counts failures would make a mid-day
+// restart re-seed from successes only and walk the tally BACKWARDS — an
+// operator pushed into `hard` by failure spend would drop back to `normal` on a
+// container bounce. `logEvent('llm', …)` writes `usage` outside its own ok
+// guard, so failure spend is already on the timeline to be summed.
+export async function seedDailyUsageFromLog(): Promise<number> {
   const day = utcDay();
-  
-  db.prepare(`
-    INSERT INTO daily_stats (date, peak_listeners, llm_tokens, tts_chars)
-    VALUES (?, 0, 0, ?)
-    ON CONFLICT(date) DO UPDATE SET tts_chars = tts_chars + excluded.tts_chars
-  `).run(day, chars);
-}
-
-// TTS characters spent so far today (UTC).
-export function dailyTtsCharsUsed(): number {
-  ensureTodayRow();
-  const db = getTelemetryDb();
-  const row = db.prepare('SELECT tts_chars FROM daily_stats WHERE date = ?').get(utcDay()) as any;
-  return row ? row.tts_chars : 0;
-}
-
-// Record a new peak listener count for today if it exceeds the current peak.
-export function addPeakListeners(count: number): void {
-  if (!Number.isFinite(count) || count <= 0) return;
-  const db = getTelemetryDb();
-  const day = utcDay();
-  
-  db.prepare(`
-    INSERT INTO daily_stats (date, peak_listeners, llm_tokens, tts_chars)
-    VALUES (?, ?, 0, 0)
-    ON CONFLICT(date) DO UPDATE SET peak_listeners = MAX(peak_listeners, excluded.peak_listeners)
-  `).run(day, count);
-}
-
-// Peak listeners so far today (UTC).
-export function peakListenersToday(): number {
-  ensureTodayRow();
-  const db = getTelemetryDb();
-  const row = db.prepare('SELECT peak_listeners FROM daily_stats WHERE date = ?').get(utcDay()) as any;
-  return row ? row.peak_listeners : 0;
-}
-
-// Stub function to maintain compatibility with log.ts calling it on boot
-export async function seedDailyUsageFromLog(): Promise<{ tokens: number; chars: number }> {
-  // DB is already durable, so we just return the current values
-  return { tokens: dailyTokensUsed(), chars: dailyTtsCharsUsed() };
+  let seeded = 0;
+  try {
+    const raw = await readFile(`${STATE_DIR}/logs/events-${day}.jsonl`, 'utf8');
+    for (const line of raw.split('\n')) {
+      if (!line) continue;
+      try {
+        const e = JSON.parse(line);
+        if (e?.type === 'llm' && e.usage?.total) seeded += e.usage.total;
+      } catch {
+        // Skip a malformed line — never let one bad row abort the seed.
+      }
+    }
+  } catch {
+    // No file yet → nothing spent today.
+  }
+  bucketDay = day;
+  bucketTokens = seeded;
+  return seeded;
 }

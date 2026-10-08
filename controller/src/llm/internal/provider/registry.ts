@@ -11,18 +11,8 @@ import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { config } from '../../../config.js';
 import * as settings from '../../../settings.js';
-import {
-  currentKey,
-  fingerprint,
-  getLastFailure,
-  GOOGLE_KEY_ENV,
-  poolConfigured,
-  recordLastFailure,
-  reportKeyFailure,
-  reportKeySuccess,
-} from '../../../util/google-key-pool.js';
 import { recordRawRequest, rawDebugEnabled } from '../telemetry/raw-debug.js';
-import { capabilitiesFor, appliedRepeatPenalty, appliedNumCtx } from './capabilities.js';
+import { capabilitiesFor, appliedRepeatPenalty, appliedNumCtx, thinkingMandatoryModel } from './capabilities.js';
 
 // Built clients, keyed by a signature covering every field captured at
 // construction, so a settings edit is picked up with no explicit invalidation.
@@ -52,128 +42,6 @@ export function debugFetch(url: any, init: any) {
     } catch { /* capture must never break a model call */ }
   }
   return fetch(url, init);
-}
-
-/**
- * The Google transport, and where key rotation happens.
- *
- * Two jobs, in this order:
- *
- *  1. Stamp `x-goog-api-key` with whichever pooled key is currently live, so
- *     ONE cached client serves the whole pool. The alternative — rebuilding the
- *     provider per key — invalidates the client cache on every rotation and
- *     drops the per-provider headers captured at construction.
- *
- *  2. Rotate ON a quota 429: park the exhausted key for as long as Google
- *     asked, then re-issue the same request with the next key.
- *
- * Rotating here rather than in withTransientRetry is deliberate. In the retry
- * layer a 429 would either sleep on the key that just refused (burning the
- * agent deadline on a key whose quota is gone until tomorrow) or escalate
- * straight to the backup leg, skipping the nine other keys entirely. Doing it
- * at the transport means the SDK's own retry budget never observes the 429,
- * `withTransientRetry` and `withFailover` are untouched, and rotation composes
- * with the existing dead-air fallbacks for free.
- *
- * Safe to re-send: every request through here is a model generation (LLM
- * prompt or TTS render), both idempotent, so a repeat costs tokens and nothing
- * else. Bounded by the pool — each recursion parks a key, so the depth is the
- * pool size and `currentKey()` returning the same key ends it.
- *
- * With no pool configured this is exactly the SDK's own transport, so an
- * unconfigured station is byte-identical to before.
- */
-/**
- * The `apiKey` to hand `createGoogleGenerativeAI` at CONSTRUCTION time.
- *
- * This exists because the SDK resolves a missing `apiKey` from the environment
- * variable `GOOGLE_GENERATIVE_AI_API_KEY` and throws `LoadAPIKeyError` if that
- * is also unset — it never looks at the pool. Passing `apiKey` only when
- * `cfg.apiKey` was set therefore broke the exact configuration the feature is
- * for: a pool-only station (no singular variable at all) failed every chat
- * generation and every embedding with ZERO fetch calls, so the pooled
- * transport never ran. googleKeyFetch re-stamps the real per-request key on
- * every call, so the value given here is only what the constructor requires —
- * but it must be a real configured credential, not a placeholder, because a
- * placeholder would be sent as the key whenever the pool has nothing live.
- */
-export function googleApiKeyForSdk(cfg: any): string | undefined {
-  // Order matters, and the last element is deliberately the LEGACY variable:
-  // a station that has never configured a pool still needs a construction key,
-  // and `undefined` here lets the SDK read that variable itself exactly as it
-  // always did. A pool-only station has the plural set and the singular unset,
-  // which is the case the SDK cannot help with — hence the pool lookup first.
-  return cfg.apiKey || currentKey() || process.env[GOOGLE_KEY_ENV] || undefined;
-}
-
-export async function googleKeyFetch(url: any, init?: any): Promise<Response> {
-  // Explicit pool configuration is what arms rotation. A legacy single-key
-  // station is NOT a one-key pool: it keeps the plain transport, so an
-  // unhinted 429 parks nothing and every call retries as it always did.
-  if (!poolConfigured()) return debugFetch(url, init);
-  return rotateGoogle(url, init, new Set());
-}
-
-/**
- * One call's rotation, bounded by the POOL SIZE and by nothing else.
- *
- * `attempted` is request-local and is what actually terminates this. The
- * previous version re-derived eligibility from shared holds on every recursion,
- * and a hold shorter than the request that follows it expired mid-call, so the
- * key that had just failed came back as eligible and was retried — two keys and
- * a 10ms hint gave A,B,A,B,A,B… with no stop. Holds are shared state whose
- * lifetime has nothing to do with this call, so they cannot bound this call.
- * The bound is also capped at the pool size, so a pool mutated mid-call (an
- * operator adding a key) cannot extend the recursion past a sane depth either.
- */
-async function rotateGoogle(url: any, init: any, attempted: Set<string>): Promise<Response> {
-  const key = currentKey(attempted);
-  if (!key) {
-    // Every key has been tried on THIS call. Answer from the last real failure
-    // instead of spending another request on a credential we have just been
-    // told is dead — while carrying enough of that failure for
-    // withTransientRetry / withFailover to classify it and escalate to the
-    // backup leg.
-    const prior = getLastFailure();
-    console.log('[google] every pooled key is exhausted for this call — replaying the last quota failure without a request');
-    const headers = new Headers(prior?.headers || {});
-    if (!headers.has('retry-after')) headers.set('retry-after', '60');
-    return new Response(
-      prior?.body ?? '{"error":{"code":"quota_exceeded","message":"every pooled key is exhausted"}}',
-      { status: prior?.status ?? 429, statusText: prior?.statusText ?? 'Too Many Requests', headers },
-    );
-  }
-  attempted.add(key);
-
-  const headers = new Headers(init?.headers || {});
-  headers.set('x-goog-api-key', key);
-  const res = await debugFetch(url, { ...init, headers });
-
-  // A SUCCESS ends this call. It also clears the key's hold and strike count:
-  // a key that just answered is demonstrably not exhausted, so the next
-  // failure has to start from the short interval again. Without this the
-  // escalation ladder ratchets on failures separated by any number of
-  // successes, and a key that recovered stayed pinned at the ceiling.
-  if (res.status !== 429 && res.status !== 401) {
-    reportKeySuccess(key);
-    return res;
-  }
-
-  const body = await res.text().catch(() => '');
-  // Record the HEADERS too, not just the body. The replayed response is what
-  // the retry/failover layers classify, and `Retry-After` is one of the things
-  // they read: dropping it changed a 429's timing classification between the
-  // first attempt and the replay, which could prevent the backup leg from ever
-  // being selected.
-  recordLastFailure(res.status, res.statusText, body, res.headers);
-  const heldMs = reportKeyFailure(key, body);
-  const next = currentKey(attempted);
-  if (!next) {
-    console.log(`[google] every pooled key failed on this call — returning the ${res.status} upstream`);
-    return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers });
-  }
-  console.log(`[google] key ${fingerprint(key)} held for ${Math.round(heldMs / 1000)}s — retrying with ${fingerprint(next)}`);
-  return rotateGoogle(url, init, attempted);
 }
 
 // llama.cpp / vLLM / LM Studio honour chat_template_kwargs.enable_thinking=false;
@@ -219,272 +87,52 @@ export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch, forceNoT
   const penalty = appliedRepeatPenalty(cfg);
   const noThink = forceNoThink || cfg?.reasoning !== true;
   return (url: any, init: any) => {
-    let reqModel = '';
-    // Captured for the response-side prose→tool-call synthesiser below.
-    let reqToolChoice: any;
-    let reqTools: any[] = [];
     if (init?.body && typeof init.body === 'string') {
       try {
         const body = JSON.parse(init.body);
-        reqModel = body.model;
-        reqToolChoice = body.tool_choice;
-        reqTools = Array.isArray(body.tools) ? body.tools : [];
         if (penalty != null && body.repeat_penalty === undefined) {
           body.repeat_penalty = penalty;
         }
         if (noThink) {
-          const m = String(body.model || '').toLowerCase();
-          // Skip OpenAI-specific no-think params for models that are routed
-          // through an aggregator (gemini/, cf/, free_shit) — they don't
-          // understand these fields and will 400 or ignore them.
-          if (!m.startsWith('gemini/') && !m.startsWith('cf/') && m !== 'free_shit') {
-            body.chat_template_kwargs = {
-              ...(body.chat_template_kwargs || {}),
-              enable_thinking: false,
-            };
-            if (body.reasoning_format === undefined) body.reasoning_format = 'deepseek';
-            if (body.thinking === undefined) body.thinking = { type: 'disabled' };
-            if (body.reasoning === undefined) {
-              body.reasoning = reasoningMandatoryModel(m)
-                ? { effort: 'minimal' }
-                : { enabled: false };
-            }
+          body.chat_template_kwargs = {
+            ...(body.chat_template_kwargs || {}),
+            enable_thinking: false,
+          };
+          if (body.reasoning_format === undefined) body.reasoning_format = 'deepseek';
+          // A proxy forwarding this to a thinking-mandatory Claude model would
+          // turn it into the 400 it exists to avoid; `reasoning` below carries
+          // the minimal-effort ask for those instead.
+          if (body.thinking === undefined && !thinkingMandatoryModel(String(body.model || ''))) {
+            body.thinking = { type: 'disabled' };
+          }
+          if (body.reasoning === undefined) {
+            body.reasoning = reasoningMandatoryModel(String(body.model || ''))
+              ? { effort: 'minimal' }
+              : { enabled: false };
           }
         }
         if (Array.isArray(body.tools) && body.tools.length > 0 &&
             body.parallel_tool_calls === undefined) {
           body.parallel_tool_calls = false;
         }
-        if (body.stream === undefined) body.stream = false;
-        // Disable Gemini's default safety filters when the model is routed via
-        // 9router's OpenAI-compatible path (gemini/ prefix). The native `google`
-        // provider has safetySettings: BLOCK_NONE wired in registry.ts, but that
-        // path is bypassed here. `safe_prompt: false` is 9router's mechanism to
-        // pass through BLOCK_NONE to the upstream Gemini API.
-        // Confirmed working: gemini/gemini-3.8-flash via 9router responds to
-        // explicit requests that would otherwise be blocked.
-        if (String(body.model || '').toLowerCase().startsWith('gemini/')) {
-          body.safe_prompt = false;
-        }
         init = { ...init, body: JSON.stringify(body) };
       } catch { /* not JSON — leave the request untouched */ }
     }
-    const t0 = Date.now();
-    const parsedBodyForLog = init?.body ? JSON.parse(init.body) : null;
-    console.log(`[LLM Fetch] starting request to ${url}... model=${parsedBodyForLog?.model ?? 'unknown'}`);
-
-    return baseFetch(url, init).then(async (res: any) => {
-      const ms = Date.now() - t0;
-      if (res.status >= 400) {
-        const clone = res.clone();
-        const text = await clone.text().catch(() => 'could not read body');
-        console.log(`[LLM Fetch] ${url} returned ${res.status} in ${ms}ms. Body: ${text}`);
-      } else {
-        console.log(`[LLM Fetch] ${url} returned ${res.status} in ${ms}ms`);
-        if (reqModel) {
-          try {
-            let text = '';
-            const clone = res.clone();
-            text = await clone.text();
-            const json = JSON.parse(text);
-            // Strip markdown fences from tool_call arguments. Certain models
-            // (e.g. Nemotron via Free_Shit) occasionally emit their tool call
-            // arguments wrapped in ```json fences, which makes ai-sdk's JSON
-            // parser crash with "Invalid JSON response". Sanitise in-flight so
-            // the failure never reaches the SDK layer.
-            let mutated = false;
-            const choices = json.choices;
-            if (Array.isArray(choices)) {
-              for (const choice of choices) {
-                const toolCalls = choice?.message?.tool_calls;
-                if (Array.isArray(toolCalls)) {
-                  for (const tc of toolCalls) {
-                    const raw = tc?.function?.arguments;
-                    if (typeof raw === 'string') {
-                      try {
-                        JSON.parse(raw);
-                      } catch {
-                        // Not valid JSON — try to extract it from markdown fences or prose
-                        let extracted = raw;
-                        const match = raw.match(/\`\`\`(?:json)?\s*(\{[\s\S]*?\})\s*\`\`\`/i);
-                        if (match) {
-                          extracted = match[1];
-                        } else {
-                          const first = raw.indexOf('{');
-                          const last = raw.lastIndexOf('}');
-                          if (first !== -1 && last !== -1 && last > first) {
-                            extracted = raw.substring(first, last + 1);
-                          }
-                        }
-                        if (extracted !== raw) {
-                          try {
-                            JSON.parse(extracted); // Verify we actually extracted valid JSON
-                            tc.function.arguments = extracted;
-                            mutated = true;
-                            console.log(`[LLM Fetch] extracted JSON tool_call arguments from prose for '${tc.function?.name}'`);
-                          } catch (err: any) {
-                            console.log(`[LLM Fetch] failed to extract valid JSON from prose. Raw was: ${JSON.stringify(raw)}`);
-                          }
-                        } else {
-                          const reqTools = parsedBodyForLog?.tools || [];
-                          const toolSchema = reqTools.find((t: any) => t?.function?.name === tc.function?.name);
-                          const props = toolSchema?.function?.parameters?.properties;
-                          
-                          if (props && (props.text || props.say || props.reason || props.query || props.ack || props.kind)) {
-                            const synthArgs: Record<string, any> = {};
-                            if (props.id)     synthArgs.id     = `synth-${Date.now()}`;
-                            if (props.reason) synthArgs.reason = 'auto';
-                            if (props.air)    synthArgs.air    = true;
-                            if (props.say)    synthArgs.say    = raw;
-                            if (props.text)   synthArgs.text   = raw;
-                            if (props.ack)    synthArgs.ack    = raw;
-                            if (props.kind)   synthArgs.kind   = 'track';
-                            if (props.transition) synthArgs.transition = 'auto';
-                            if (props.sfx)    synthArgs.sfx    = null;
-                            if (props.query)  synthArgs.query  = raw;
-                            if (props.skill)  synthArgs.skill  = null;
-                            if (props.intro)  synthArgs.intro  = raw;
-                            if (props.segment) synthArgs.segment = { kind: 'chat', text: raw, sfx: null };
-                            
-                            tc.function.arguments = JSON.stringify(synthArgs);
-                            mutated = true;
-                            console.log(`[LLM Fetch] wrapped plain text into JSON object for '${tc.function?.name}'`);
-                          } else {
-                            console.log(`[LLM Fetch] raw tool_call arguments string is not valid JSON and could not be extracted. Raw was: ${JSON.stringify(raw)}`);
-                          }
-                        }
-                      }
-                    } else if (typeof raw === 'object' && raw !== null) {
-                      // Some models (via OpenRouter/9router) return the arguments as a JSON object directly
-                      // instead of a stringified JSON string. ai-sdk uses a strict Zod schema that expects a string,
-                      // so this causes an "Invalid JSON response" crash if we don't fix it.
-                      tc.function.arguments = JSON.stringify(raw);
-                      mutated = true;
-                      console.log(`[LLM Fetch] converted object tool_call arguments to string for '${tc.function?.name}'`);
-                    }
-                  }
-                }
-              }
-            }
-            // --- Prose → tool-call synthesis ---
-            // Nemotron (Free_Shit) occasionally writes plain text instead of
-            // calling the forced terminal tool (done/emit). This intercepts
-            // that case and synthesises a proper tool_calls entry so ai-sdk
-            // never sees the raw prose.
-            //
-            // Synthesis ONLY fires when:
-            //   1. The request had tool_choice:'required'
-            //   2. The response has text content but no tool_calls
-            //   3. There is a terminal tool (done/emit) whose schema has a
-            //      'text' string property — i.e. a segment/skill output.
-            //
-            // Picker calls (schema requires an 'id' field, not 'text') are
-            // intentionally excluded so their normal failover path runs.
-            if (reqToolChoice === 'required' && reqTools.length > 0 && Array.isArray(choices)) {
-              for (const choice of choices) {
-                const msg = choice?.message;
-                const hasToolCalls = Array.isArray(msg?.tool_calls) && msg.tool_calls.length > 0;
-                const hasContent = typeof msg?.content === 'string' && msg.content.trim().length > 0;
-                if (!hasToolCalls && hasContent) {
-                  // Synthesise tool call from prose, or extract it if they dumped JSON into the content block
-                  const terminalTool = reqTools.find((t: any) => t?.function?.name === 'done' || t?.function?.name === 'emit');
-                  if (terminalTool) {
-                    const content = msg.content.trim();
-                    const props = terminalTool.function?.parameters?.properties;
-                    if (props != null) {
-                      let parsedFromContent: Record<string, any> | null = null;
-                      try {
-                        const match = content.match(/\`\`\`(?:json)?\s*(\{[\s\S]*?\})\s*\`\`\`/i);
-                        const strToParse = match ? match[1] : content.substring(content.indexOf('{'), content.lastIndexOf('}') + 1);
-                        if (strToParse) parsedFromContent = JSON.parse(strToParse);
-                      } catch (e) {
-                        // ignore parse failure, fallback to raw string mapping
-                      }
-
-                      const synthArgs: Record<string, any> = parsedFromContent ? { ...parsedFromContent } : {};
-                      if (!parsedFromContent) {
-                        if (props.id)     synthArgs.id     = `synth-${Date.now()}`;
-                        if (props.reason) synthArgs.reason = 'auto';
-                        if (props.air)    synthArgs.air    = true;
-                        if (props.say)    synthArgs.say    = content;
-                        if (props.text)   synthArgs.text   = content;
-                        if (props.ack)    synthArgs.ack    = content;
-                        if (props.kind)   synthArgs.kind   = 'track';
-                        if (props.transition) synthArgs.transition = 'auto';
-                        if (props.sfx)    synthArgs.sfx    = null;
-                        if (props.query)  synthArgs.query  = content;
-                        if (props.skill)  synthArgs.skill  = null;
-                        if (props.intro)  synthArgs.intro  = content;
-                        if (props.segment) synthArgs.segment = { kind: 'chat', text: content, sfx: null };
-                      }
-
-                      msg.tool_calls = [{
-                        id: `synth-${Date.now()}`,
-                        type: 'function',
-                        function: {
-                          name: terminalTool.function.name,
-                          arguments: JSON.stringify(synthArgs),
-                        }
-                      }];
-                      msg.content = null;
-                      choice.finish_reason = 'tool_calls';
-                      mutated = true;
-                      console.log(`[LLM Fetch] synthesised '${terminalTool.function.name}' tool call from prose (${content.length} chars)`);
-                    }
-                  }
-                }
-              }
-            }
-            // --- End prose → tool-call synthesis ---
-
-            if (json.model && json.model !== reqModel) {
-              console.log(`[LLM Fetch] rewriting response model from '${json.model}' to '${reqModel}'`);
-              json.model = reqModel;
-              mutated = true;
-            }
-            if (mutated) {
-              const newHeaders = new Headers(res.headers);
-              newHeaders.delete('content-encoding');
-              newHeaders.delete('content-length');
-              newHeaders.delete('transfer-encoding');
-              return new Response(JSON.stringify(json), {
-                status: res.status,
-                statusText: res.statusText,
-                headers: newHeaders,
-              });
-            }
-          } catch (e) {
-            // Not JSON or parse error on the main response envelope, just return original
-            console.log(`[LLM Fetch] FATAL: model returned invalid JSON wrapper. Raw body could not be parsed.`);
-          }
-        }
-      }
-      return res;
-    }).catch((err: any) => {
-      const ms = Date.now() - t0;
-      console.log(`[LLM Fetch] ${url} FAILED in ${ms}ms: ${err.message}`);
-      throw err;
-    });
+    return baseFetch(url, init);
   };
 }
 
 // Model families that 400 on `reasoning:{enabled:false}` (OpenAI gpt-5/o-series,
-// DeepSeek R1 variants) and must be minimised with `effort:'minimal'` instead.
-// Deliberately broad at openai/* — harmless on non-reasoning openai models.
+// DeepSeek R1 variants, the thinking-mandatory Claude generations) and must be
+// minimised with `effort:'minimal'` instead. Deliberately broad at openai/* —
+// harmless on non-reasoning openai models.
 export function reasoningMandatoryModel(id: string): boolean {
-  return /^openai\//i.test(id) || /(^|\/)deepseek-r1/i.test(id);
+  return /^openai\//i.test(id) || /(^|\/)deepseek-r1/i.test(id) || thinkingMandatoryModel(id);
 }
 
 // Ollama server URL: settings field, else the config default.
-/**
- * Per-call safety thresholds for the native `google` provider. ai-sdk reads
- * safetySettings ONLY from per-call providerOptions — not from the
- * model-construction settings object, which never reaches the wire (proven:
- * a construction-arg threshold produced no safetySettings in the request
- * body). Checked = block that category; unchecked/absent = allow.
- * Every other provider gets {} (no-op spread).
- */
-export function ollamaBaseUrl(cfg: any): string {  return cfg.ollamaUrl || config.ollama.url;
+export function ollamaBaseUrl(cfg: any): string {
+  return cfg.ollamaUrl || config.ollama.url;
 }
 
 // Chat default for the `locca` provider (llama.cpp on the host). settings
@@ -523,7 +171,8 @@ export const OPENROUTER_APP_HEADERS = {
 // accept any non-empty key, so fall back to a placeholder.
 function openAICompatibleModel(cfg: any, id: string, baseURL: string, name: string, forceNoThink = false) {
   // debugFetch is the inner transport, so the capture is the body as sent.
-  const fetchImpl = openAICompatibleFetch(cfg, debugFetch, forceNoThink);
+  const fetchImpl = cfg.provider === 'openai-compatible' && cfg.compatibleMode === 'hosted'
+    ? debugFetch : openAICompatibleFetch(cfg, debugFetch, forceNoThink);
   const headers = customHeaders(cfg);
   const provider = createOpenAI({
     baseURL,
@@ -586,10 +235,11 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
   // suppresses per-call. Keyed into the sig so the variants don't collide.
   const caps = capabilitiesFor(cfg.provider);
   const constructionNoThink = opts.forceNoThink === true && caps.reasoningConstructionOnly === true;
-  const bodyNoThink = opts.forceNoThink === true && caps.samplingViaBody === true;
+  const bodyNoThink = opts.forceNoThink === true && caps.samplingViaBody === true
+    && !(cfg.provider === 'openai-compatible' && cfg.compatibleMode === 'hosted');
   // repeat_penalty and num_ctx are captured at construction, so both key the
   // cache or an edit reads as ignored until the controller restarts (#1327).
-  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink) ? 'nt1' : 'nt0'}|ctx${appliedNumCtx(cfg) ?? ''}|rp${appliedRepeatPenalty(cfg) ?? ''}|hd${headersSig(cfg)}`;
+  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink) ? 'nt1' : 'nt0'}|ctx${appliedNumCtx(cfg) ?? ''}|rp${appliedRepeatPenalty(cfg) ?? ''}|hd${headersSig(cfg)}|cm${cfg.compatibleMode || 'local'}`;
 
   const cached = clientCache.get(sig);
   if (cached) return cached;
@@ -616,18 +266,7 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
       break;
     }
     case 'google': {
-      // googleKeyFetch, not debugFetch: the key is re-stamped per request from
-      // the pool, which is what lets a 429 rotate credentials without
-// rebuilding this cached client. The construction apiKey is only what the
-      // SDK demands before it will build a client at all — see googleApiKeyForSdk
-      // for why omitting it broke pool-only stations entirely. The baseUrl/Bearer
-      // hop is this station's gateway path and is unchanged.
-      const provider = createGoogleGenerativeAI({
-        fetch: googleKeyFetch,
-        apiKey: googleApiKeyForSdk(cfg),
-        ...(cfg.baseUrl ? { baseURL: cfg.baseUrl, headers: { Authorization: `Bearer ${cfg.apiKey}` } } : {})
-      });
-      // @ts-ignore - provider types changed in newer ai-sdk versions
+      const provider = createGoogleGenerativeAI({ fetch: debugFetch, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
       model = provider(id);
       break;
     }

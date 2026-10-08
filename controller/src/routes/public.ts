@@ -6,6 +6,7 @@ import { stat, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import * as subsonic from '../music/subsonic.js';
+import { recordHttpAttempt } from '../music/subsonic-log.js';
 import * as library from '../music/library.js';
 import * as blocklist from '../music/blocklist.js';
 import * as settings from '../settings.js';
@@ -16,7 +17,8 @@ import { getStreamStatus } from '../broadcast/listeners.js';
 import { isIdle } from '../broadcast/stream-idle.js';
 import { currentStarve } from '../broadcast/music-starve.js';
 import { getSetupStatusSync } from '../setup/firstRun.js';
-import { getStationTimezone } from '../time.js';
+import { clockDisplay, getStationTimezone, zonedParts } from '../time.js';
+import { composeBoothFeed } from '../broadcast/booth-carry.js';
 import { listThemesAnnotated, DEFAULT_THEME_ID } from '../themes.js';
 import { listCommunitySkills } from '../skills/loader.js';
 import { listCommunityPersonas } from '../personas/community.js';
@@ -111,7 +113,9 @@ router.get('/cover/:id', async (req, res) => {
   }
 
   try {
-    const r = await fetchWithTimeout(subsonic.getCoverArtUrl(id, 512), { timeoutMs: 5000 });
+    const url = subsonic.getCoverArtUrl(id, 512);
+    recordHttpAttempt('getCoverArt', 'cover');
+    const r = await fetchWithTimeout(url, { timeoutMs: 5000 });
     if (!r.ok) return res.status(502).end();
     const entry = {
       buf: Buffer.from(await r.arrayBuffer()),
@@ -619,7 +623,11 @@ router.get('/themes', async (req, res) => {
 
 // Live session header plus a bounded tail of its turns for the Booth feed.
 // `sfx` turns are dropped here (internal agent action, not something said on
-// air) but stay in the session history for the agent's own context.
+// air) but stay in the session history for the agent's own context. For a
+// while after a hard roll the outgoing show's tail (`meta.carried`) and a
+// `kind: 'show-boundary'` separator lead the feed, so a passive display does
+// not go blank at a show boundary (#1690). Display only; `session` still
+// describes the live session alone.
 router.get('/session', (req, res) => {
   const s = session.getSession();
   if (!s) return res.json({ session: null, messages: [] });
@@ -631,7 +639,10 @@ router.get('/session', (req, res) => {
       startedAt: s.startedAt,
       show: s.show?.name || null,
     },
-    messages: s.messages.filter(m => m.kind !== 'sfx').slice(-120),
+    messages: composeBoothFeed(s, Date.now(), (at) => {
+      const p = zonedParts(new Date(at));
+      return clockDisplay(p.hour, p.minute, settings.get().locale === 'en-US');
+    }).slice(-120),
   });
 });
 

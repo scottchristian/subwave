@@ -6,6 +6,8 @@
 //   --re-analyze   drop existing analysis and redo everything
 //   --walk         force a Navidrome metadata refresh first
 //   --skip-walk    never walk, even on an empty catalogue (wins over --walk)
+//   --confirm-prune  allow a walk to remove more missing tracks than
+//                  music/prune-policy.ts lets it remove on its own
 //   --audio        backfill CLAP vectors on analysed tracks (implied by ANALYZE_AUDIO_EMBEDDING)
 //   --vocal        backfill Demucs vocal ranges (implied by ANALYZE_VOCAL_ACTIVITY)
 //
@@ -15,9 +17,8 @@ import * as subsonic from './subsonic.js';
 import * as db from './library-db.js';
 import * as settings from '../settings.js';
 import * as embeddings from './embeddings.js';
-import { config } from '../config.js';
 import { loadSecretsIntoEnv } from '../setup/secrets.js';
-import { loadSetupConfig } from '../setup/config.js';
+import { loadNavidromeConfig } from '../setup/config.js';
 import { runAnalysisPass } from './analyze.js';
 import { adoptAndPrune } from './id-rotation.js';
 import * as analyzer from './analyzer.js';
@@ -39,7 +40,7 @@ function parseIntFlag(args: string[], name: string): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-// Mirror of tag-library.ts applyWizardOverlay — env wins, setup-config fills gaps.
+// Both maintenance workers use the same connection policy as the controller.
 async function applyWizardOverlay() {
   try {
     await loadSecretsIntoEnv();
@@ -47,12 +48,7 @@ async function applyWizardOverlay() {
     console.error('[secrets] load failed:', err.message);
   }
   try {
-    const sc = await loadSetupConfig();
-    if (sc.navidrome) {
-      if (!process.env.NAVIDROME_URL && sc.navidrome.url) config.navidrome.url = sc.navidrome.url;
-      if (!process.env.NAVIDROME_USER && sc.navidrome.user) config.navidrome.user = sc.navidrome.user;
-      if (!process.env.NAVIDROME_PASS && sc.navidrome.pass) config.navidrome.password = sc.navidrome.pass;
-    }
+    await loadNavidromeConfig();
   } catch (err: any) {
     console.error('[setup-config] load failed:', err.message);
   }
@@ -110,27 +106,39 @@ async function main() {
     reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: 0 });
     let walked = 0;
     const liveIds = new Set<string>();
-    for await (const song of subsonic.iterateAllSongs()) {
-      db.upsertTrackMeta(song.id, {
-        title: song.title,
-        artist: song.artist,
-        album: song.album,
-        // Same ids the tagger's walk records; must not be NULL on an
-        // analyzer-only catalogue.
-        albumId: song.albumId ?? null,
-        artistId: song.artistId ?? null,
-        year: song.year,
-        genres: subsonic.songGenres(song),
-        duration: song.duration,
-      });
-      liveIds.add(song.id);
-      walked += 1;
-      if (walked % 500 === 0) {
-        console.log(`[analyze] walked ${walked} tracks`);
-        reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: walked });
+    // A walk that prunes must be complete (same rule as the tagger's walk):
+    // with the best-effort walk, an album whose getAlbum failed was skipped
+    // and its tracks then deleted as "no longer in Navidrome", with every
+    // tag, analysis and vector on them. An incomplete walk keeps the metadata
+    // it refreshed, prunes nothing and lets the analysis pass run.
+    let walkComplete = true;
+    try {
+      for await (const song of subsonic.iterateAllSongs({ requireComplete: true })) {
+        db.upsertTrackMeta(song.id, {
+          title: song.title,
+          artist: song.artist,
+          album: song.album,
+          // Same ids the tagger's walk records; must not be NULL on an
+          // analyzer-only catalogue.
+          albumId: song.albumId ?? null,
+          artistId: song.artistId ?? null,
+          year: song.year,
+          genres: subsonic.songGenres(song),
+          duration: song.duration,
+        });
+        liveIds.add(song.id);
+        walked += 1;
+        if (walked % 500 === 0) {
+          console.log(`[analyze] walked ${walked} tracks`);
+          reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: walked });
+        }
       }
+    } catch (err) {
+      walkComplete = false;
+      const why = err instanceof Error ? err.message : String(err);
+      logEvent('warning', `Library walk incomplete after ${walked.toLocaleString('en-GB')} tracks (${why}); nothing pruned this run`);
     }
-    logEvent('info', `Scanned ${walked.toLocaleString('en-GB')} tracks`);
+    if (walkComplete) logEvent('info', `Scanned ${walked.toLocaleString('en-GB')} tracks`);
 
     // Reconcile: adopt rows whose id was rotated by Navidrome's canonical-id
     // migration (music/id-rotation.ts — analysis carries over instead of being
@@ -145,8 +153,9 @@ async function main() {
     // the tagger run and Library → Reconcile with Navidrome. Adoption is wired
     // here anyway so the CLI can't be the one path that prunes what the others
     // adopt.
-    if (walked > 0) {
-      const { pruned } = await adoptAndPrune(liveIds);
+    if (walkComplete && walked > 0) {
+      const { pruned, held } = await adoptAndPrune(liveIds, { confirmMassPrune: args.includes('--confirm-prune') });
+      if (held) logEvent('warning', held.message);
       if (pruned > 0) {
         console.log(`[analyze] pruned ${pruned} orphaned tracks no longer in Navidrome`);
       }

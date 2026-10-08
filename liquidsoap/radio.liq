@@ -201,8 +201,8 @@ if file.exists("#{state_dir}/liquidsoap_flac_enabled.txt") then
   flac_enabled := (raw == "true")
 end
 
-# ICY (out-of-band) per-track titles on BOTH Ogg mounts. ON by default — only an
-# explicit "false" disables. See make_stream_outputs() for the client trade-off.
+# Legacy ICY (out-of-band) per-track titles for the Opus mount. ON by default —
+# only an explicit "false" disables. FLAC always uses native chained Ogg tags.
 if file.exists("#{state_dir}/liquidsoap_ogg_icy_metadata.txt") then
   raw = string.trim(file.contents("#{state_dir}/liquidsoap_ogg_icy_metadata.txt"))
   ogg_icy_metadata := (raw != "false")
@@ -213,7 +213,7 @@ if file.exists("#{state_dir}/liquidsoap_station_name.txt") then
   if raw != "" then station_name := raw end
 end
 
-log("settings loaded: jingle_ratio=#{jingle_ratio()} crossfade_duration=#{crossfade_duration()} duck_voice=#{duck_voice()} duck_intro=#{duck_intro()} archive_enabled=#{archive_enabled()} archive_bitrate=#{archive_bitrate()} stream_bitrate=#{stream_bitrate()} opus_enabled=#{opus_enabled()} opus_bitrate=#{opus_bitrate()} flac_enabled=#{flac_enabled()} aac_enabled=#{aac_enabled()} aac_bitrate=#{aac_bitrate()} ogg_icy_metadata=#{ogg_icy_metadata()} station_name=#{station_name()}")
+log("settings loaded: jingle_ratio=#{jingle_ratio()} crossfade_duration=#{crossfade_duration()} duck_voice=#{duck_voice()} duck_intro=#{duck_intro()} archive_enabled=#{archive_enabled()} archive_bitrate=#{archive_bitrate()} stream_bitrate=#{stream_bitrate()} opus_enabled=#{opus_enabled()} opus_bitrate=#{opus_bitrate()} flac_enabled=#{flac_enabled()} aac_enabled=#{aac_enabled()} aac_bitrate=#{aac_bitrate()} opus_icy_metadata=#{ogg_icy_metadata()} flac_metadata=native station_name=#{station_name()}")
 
 # subhttp:<full-url> — whole-file download via curl (http.get.stream returns
 # spurious 522s on the Cloudflare-fronted Navidrome origin).
@@ -415,11 +415,80 @@ music = cue_cut(music)
 # through its internal simple_transition and ignores a custom callback. `a`/`b`
 # are records with .source/.metadata/.db_level.
 #
-# `cross` sizes this transition's buffer from the OUTGOING track's
-# liq_cross_duration stamp, so the fade must read `a.metadata` too or fade !=
-# buffer (longer is truncated into a gap, shorter sums to +6 dB).
+# CROSS STAMPS — the controller stamps ONE value per track, liq_cross_duration,
+# meaning "how long the transition OUT of this track lasts". `cross` needs it
+# twice: as the END duration of this track and as the START duration of the
+# next one. This rewrite runs on the source feeding `cross`, so it sees tracks
+# in the order cross pulls them, and it emits both explicitly:
+#   liq_cross_end_duration   = this track's own stamp (station crossfade if the
+#                              track carries none — a jingle, a cold-boot auto
+#                              pick — instead of inheriting the last one)
+#   liq_cross_start_duration = the PREVIOUS track's end value
+# A replayed metadata chunk must not advance the chain. The request's `rid`
+# distinguishes new airings of the same local file, including repeated jingles;
+# fallback metadata replay keeps that request ID and reuses its stamps.
+cross_prev_end = ref(crossfade_duration())
+cross_last_file = ref("")
+cross_last_rid = ref("")
+cross_last_stamps = ref([])
+
+def cross_stamps(m) =
+  # `fname`, not `file`: a local `file` shadows the stdlib file.* module
+  # (Liquidsoap Warning 6 at startup).
+  fname = m["filename"]
+  rid = m["rid"]
+  if fname != "" and fname == cross_last_file() and rid == cross_last_rid() then
+    cross_last_stamps()
+  else
+    own = float_of_string(default=crossfade_duration(), m["liq_cross_duration"])
+    own = if own < 0. then crossfade_duration() else own end
+    stamps = [
+      ("liq_cross_start_duration", string(cross_prev_end())),
+      ("liq_cross_end_duration", string(own)),
+      ("liq_cross_duration", "")
+    ]
+    cross_prev_end := own
+    cross_last_file := fname
+    cross_last_rid := rid
+    cross_last_stamps := stamps
+    stamps
+  end
+end
+
+# Remove every cross override key from what the transition EMITS. `cross`
+# processes override keys on its output frames too; without this the replayed
+# outgoing metadata re-sizes the incoming track's own end buffer.
+def strip_cross_stamps(s) =
+  metadata.map(update=true, strip=true, fun (_) -> [
+    ("liq_cross_duration", ""),
+    ("liq_cross_start_duration", ""),
+    ("liq_cross_end_duration", "")
+  ], s)
+end
+
+# BUFFER SIZING (measured on air, 2.4.5): `cross` sizes the outgoing TAIL from its
+# end duration and the incoming HEAD from its start duration, then trims both to
+# the shorter one before calling this function. A single liq_cross_duration
+# stamp could not keep those in step: cross re-applies the override keys it
+# finds in its OWN output, and the transition replays the OUTGOING track's
+# metadata, so each tail was sized by the stamp of the track BEFORE the
+# outgoing one (3931 of 3997 logged transitions), while the head followed the
+# incoming stamp. CROSS STAMPS below translates the controller's one stamp into
+# explicit start/end values per track, and STRIP_CROSS_STAMPS keeps cross from
+# re-reading them off its output.
+#
+# The fade length is the length actually buffered, not a stamp: the two a/b
+# sources are already equal length here, so `d` from them is the one value
+# that can never disagree with the buffer. The stamp is only the fallback for a
+# source that cannot report its length. A mismatch is logged so a regression
+# shows up in radio.log, not on air.
 def dj_transition(a, b) =
-  d = float_of_string(default=crossfade_duration(), a.metadata["liq_cross_duration"])
+  stamp = float_of_string(default=crossfade_duration(), a.metadata["liq_cross_end_duration"])
+  buffered = min(source.remaining(a.source), source.remaining(b.source))
+  d = if buffered > 0. and buffered < 600. then buffered else stamp end
+  if abs(d - stamp) > 0.25 then
+    log(label="cross.size", level=2, "transition buffer #{d}s differs from the outgoing stamp #{stamp}s — fading over the buffer")
+  end
   # EFFECT ARMING. Every effect is APPLIED to the outgoing branch, but which
   # track carries the FLAG differs, which is why there is no arming state and no
   # remaining() watcher:
@@ -962,7 +1031,7 @@ def dj_transition(a, b) =
     else
       b_source
     end
-  add(normalize=false, [a_source, b_source])
+  strip_cross_stamps(add(normalize=false, [a_source, b_source]))
 end
 
 # The PRE-cross handle for the on_metadata hook attached further down. Hooking
@@ -1051,6 +1120,11 @@ music = amplify(override="liq_amplify", 1., music)
 # (fx-render-test.sh xdur: a stamped 12 renders 86s without persist, 78s with).
 # The flip side is that a stamp lingers over later UNstamped tracks, so the
 # controller stamps every track it annotates.
+#
+# The cross_stamps rewrite (see CROSS STAMPS above dj_transition) runs right
+# here, on the source cross reads, and below every on_metadata consumer, so
+# now-playing and the ICY title never see the rewritten keys.
+music = metadata.map(update=true, strip=true, cross_stamps, music)
 music = cross(
   duration=crossfade_duration(),
   persist_override=true,
@@ -1383,9 +1457,11 @@ radio = smooth_add(
   special=intro
 )
 
-# SFX on top. A stinger rides BENEATH both the DJ and the music, so it barely
-# ducks; its own level and p are the two knobs.
-sfx_bed = amplify(0.7, sfx_queue)
+# SFX on top. smooth_add adds the stinger at its own level and only pulls the
+# programme under it to p (~-3 dB), so the stinger airs at unity. 0.7 here
+# buried stingers under the mic_chain-boosted DJ (#1689); the bus limiter below
+# catches the sum's peaks.
+sfx_bed = amplify(1.0, sfx_queue)
 radio = smooth_add(
   duration=0.3,     # snappier than voice — stingers are short, no lead-in clip
   p={0.7},          # ~-3 dB
@@ -1699,11 +1775,8 @@ def make_stream_outputs() =
         opus_enc,
         id="stream_opus",
         fallible=true,
-        # ICY metadata toggle (default ON). output.icecast's null default
-        # guesses ICY off for Ogg and relies on in-band chained-Ogg re-emission,
-        # but many clients (Ferrosonic, Cast, Symfonium) read the Ogg comment
-        # once at connect and freeze on the first title (#1052), while
-        # foobar2000 wants the opposite. Hence a toggle.
+        # Legacy Opus compatibility toggle. False selects the encoder's native
+        # chained-Ogg metadata path; true keeps the existing external ICY mode.
         send_icy_metadata=ogg_icy_metadata(),
         host=environment.get(default="icecast", "ICECAST_HOST"),
         port=7702,
@@ -1735,8 +1808,9 @@ def make_stream_outputs() =
         ),
         id="stream_flac",
         fallible=true,
-        # ICY toggle — see the /stream.opus note above (#1052 vs foobar2000).
-        send_icy_metadata=ogg_icy_metadata(),
+        # Ogg-FLAC metadata must stay in the encoder: Icecast does not apply
+        # external ICY updates to this codec, while false emits native chained tags.
+        send_icy_metadata=false,
         host=environment.get(default="icecast", "ICECAST_HOST"),
         port=7702,
         password=environment.get("ICECAST_SOURCE_PASSWORD"),

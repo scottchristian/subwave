@@ -25,11 +25,31 @@ export const PERSONA_LIMIT = 48;
 export const PERSONA_NAME_MAX = 40;
 export const PERSONA_TAGLINE_MAX = 80;
 export const PERSONA_LANGUAGE_MAX = 60;
+// HALF the composed-style budget, and that is the whole derivation.
+//
+// The 300 this replaces equalled `VOICE_STYLE_MAX` — the entire budget
+// `geminiStyle()` composes for one render — so a directive at the cap consumed
+// all of it and `budget = max(0, 300 - operator - station)` left the persona's
+// character excerpt at zero. Every station with a pronunciation note lost the
+// character on every segment, silently, with no error anywhere.
+//
+// It is NOT a provider limit. `speech_metadata.style` has no documented
+// per-field cap, and rendering with 300 / 1000 / 3000 / 6000-character styles all
+// returned 200 against both models in MODELS. The ceiling that matters is local:
+// operator directive first, station note second, character excerpt with whatever
+// is left. 300 therefore could never be right, because it is the total.
+//
+// Half the budget leaves the other half to the two things this must not crowd
+// out. With a typical station note that is a ~130-character character excerpt —
+// enough to read as character — and the note is still honoured in full, because
+// only the excerpt is budget-limited.
+export const PERSONA_VOICE_STYLE_MAX = 150;
 // A soul rides in the system prompt on every call: a per-call token cost.
 export const PERSONA_SOUL_MAX = 2000;
-// Delivery directive for the TTS voice (accent, pace, energy). Short by
-// design: long character blocks cause voice drift on 3.8 TTS.
-export const PERSONA_VOICE_STYLE_MAX = 300;
+// Unlike Soul, musical leanings are a compact backstage selection cue. Keeping
+// this deliberately shorter prevents a second persona prompt from growing into
+// an unbounded editorial brief on every pick.
+export const PERSONA_MUSIC_LEAN_MAX = 500;
 export const PERSONA_SKILLS_LIMIT = 64;
 
 // Freeform organisation tags. Third copy of one pattern (skill.ts, show.ts) —
@@ -78,13 +98,6 @@ export function clampPersonaDial(v: unknown): number {
 // persona's `tts` and by the station rescue slot (`settings.tts.fallback`) — a
 // fallback slot is handed to speakWith() as a synthetic persona.
 
-// Adding an engine here? Check whether a second, RESTATED copy of this list
-// exists elsewhere — `SKILL_VOICE_ENGINES` in `schemas/skill.ts` is one, and
-// it is pinned EQUAL to this list by `scripts/skill-voice.test.ts`. `gemini`
-// (added in this PR) is the current example: that test starts failing the
-// moment this entry lands, and the fix is to add 'gemini' to
-// SKILL_VOICE_ENGINES in the same merge. See the note on that list — the two
-// lists cannot both be right, and the test is the tiebreak.
 export const TTS_ENGINES = [
   'piper',
   'kokoro',
@@ -114,61 +127,36 @@ export const PERSONA_TTS_ENGINES = [PERSONA_TTS_INHERIT, ...TTS_ENGINES] as cons
  */
 export const TTS_INHERITABLE_VOICE_ENGINES = ['piper', 'kokoro'] as const;
 
-// Gemini TTS models selectable from the Voice panel.
+// ── Gemini TTS vocabularies ──────────────────────────────────────────────────
 //
-// Verified through the EXACT request gemini.ts builds — `/interactions` with a
-// `speech_metadata` annotation and a `speech_config` voice — not through the
-// plain `generateContent` endpoint, which every one of these answers and which
-// therefore proves nothing about whether this engine can use them.
-//
-// The engine always sends a speech annotation, because per-persona voiceStyle is
-// a feature. That is what rules out most of the catalogue:
+// MODELS — verified through the EXACT request gemini.ts builds (`/interactions`
+// with a `speech_metadata` annotation AND a `speech_config` voice), because a
+// model that synthesises audio through generateContent can still 400 on every
+// render through this engine. The engine always sends a speech annotation,
+// because per-persona voiceStyle is sent on every turn:
 //
 //   gemini-3.1-flash-tts-preview  -> "Speech metadata is not supported for this model."
 //   gemini-2.5-flash-preview-tts -> "Speech annotations are not supported for model"
 //   gemini-2.5-pro-preview-tts   -> "Speech annotations are not supported for model"
 //
-// All three synthesise audio perfectly through `generateContent`, and all three
-// would 400 on every single render through this engine. They are deliberately
-// absent rather than offered-and-broken. Unlocking them means the engine has to
-// omit an EMPTY annotation — which cannot help while a persona carries a
-// voiceStyle — so that is a separate decision, not a dropdown entry.
+// They are deliberately ABSENT rather than offered-and-broken. Unlocking them
+// means the engine has to omit an empty annotation, which it cannot do while a
+// persona's voiceStyle may be set — a separate decision, not a dropdown entry.
+//
+// VOICES — the 30 prebuilt studio voices, verified by rendering through each.
+// `GET /v1beta/voices` is NOT the source: it is the Live/native-audio catalogue
+// (1000 rows, 198 unique), which omits Puck/Zephyr/Kore entirely.
 export const GEMINI_TTS_MODELS = [
   'gemini-3.8-flash-lite-tts',
   'gemini-3.8-flash-tts',
 ] as const;
 
 export const GEMINI_TTS_VOICES = [
-  'Zephyr',
-  'Puck',
-  'Charon',
-  'Kore',
-  'Fenrir',
-  'Leda',
-  'Orus',
-  'Aoede',
-  'Callirrhoe',
-  'Autonoe',
-  'Enceladus',
-  'Iapetus',
-  'Umbriel',
-  'Algieba',
-  'Despina',
-  'Erinome',
-  'Algenib',
-  'Rasalgethi',
-  'Laomedeia',
-  'Achernar',
-  'Alnilam',
-  'Schedar',
-  'Gacrux',
-  'Pulcherrima',
-  'Achird',
-  'Zubenelgenubi',
-  'Vindemiatrix',
-  'Sadachbia',
-  'Sadaltager',
-  'Sulafat',
+  'Zephyr', 'Puck', 'Charon', 'Kore', 'Fenrir', 'Leda', 'Orus', 'Aoede',
+  'Callirrhoe', 'Autonoe', 'Enceladus', 'Iapetus', 'Umbriel', 'Algieba',
+  'Despina', 'Erinome', 'Algenib', 'Rasalgethi', 'Laomedeia', 'Achernar',
+  'Alnilam', 'Schedar', 'Gacrux', 'Pulcherrima', 'Achird', 'Zubenelgenubi',
+  'Vindemiatrix', 'Sadachbia', 'Sadaltager', 'Sulafat',
 ] as const;
 
 export const TTS_CLOUD_PROVIDERS = [
@@ -313,9 +301,11 @@ export function ttsVoiceSlotSchema(where: string, opts?: { allowInherit?: boolea
         return fail(`${where}.voice must be 1-${TTS_VOICE_MAX} chars`);
       }
     } else if (engine === 'remote' || engine === 'gemini' || engine === PERSONA_TTS_INHERIT) {
-      // remote/gemini: sidecar- or Google-interpreted ids. inherit: no engine
-      // is known yet, so no per-engine rule can apply (resolvePersonaVoiceSlot
-      // decides at speak time). All leave only the length cap, and empty is valid.
+      // remote: sidecar-interpreted ids. gemini: a Google voice name, or a
+      // designed/replicated `voice_…`/`voicekey_…` handle, or empty for the
+      // station floor. inherit: no engine is known yet, so no per-engine rule
+      // can apply (resolvePersonaVoiceSlot decides at speak time). All three
+      // leave only the length cap, and empty is valid.
       if (voice.length > TTS_VOICE_MAX) {
         return fail(`${where}.voice must be 0-${TTS_VOICE_MAX} chars`);
       }
@@ -392,6 +382,9 @@ export function repairTtsVoiceSlot(raw: unknown, opts?: { allowInherit?: boolean
     engine !== 'chatterbox' &&
     engine !== 'piper' &&
     engine !== 'remote' &&
+    // gemini reads a Google voice id (or empty = the station floor), so a
+    // Kokoro id here would be spoken as gibberish rather than merely unused.
+    engine !== 'gemini' &&
     engine !== PERSONA_TTS_INHERIT
   ) {
     voice = 'bf_isabella';
@@ -439,8 +432,9 @@ export interface PersonaParsed {
   localColour: number;
   warmth: number;
   soul: string;
-  voiceStyle: string;
+  musicLean: string;
   language: string;
+  voiceStyle: string;
   avatar: string;
   tts: TtsVoiceSlot;
   skills: string[] | null;
@@ -492,10 +486,9 @@ export const personaSchema = z
   .object({
     name: personaCoercedText('name', 1, PERSONA_NAME_MAX),
     soul: personaCoercedText('soul', 1, PERSONA_SOUL_MAX),
-    // Optional delivery directive for the TTS voice (accent, pace, energy).
-    // Absent/empty → the sidecar's built-in style for that voice. Coerced
-    // like soul: a non-string from an older admin build reads as empty.
-    voiceStyle: personaCoercedText('voiceStyle', 0, PERSONA_VOICE_STYLE_MAX),
+    // A private, music-specific editorial preference. It never changes the
+    // presenter's voice and never overrides show filters or safety policy.
+    musicLean: personaCoercedText('musicLean', 0, PERSONA_MUSIC_LEAN_MAX),
     tagline: personaCoercedText('tagline', 0, PERSONA_TAGLINE_MAX),
     // Optional free text. Absent/empty → '' (English, no directive injected).
     // Unlike name/soul this REFUSES a non-string instead of coercing.
@@ -505,6 +498,12 @@ export const personaSchema = z
         .string({ error: 'language must be a string' })
         .trim()
         .max(PERSONA_LANGUAGE_MAX, `language must be 0-${PERSONA_LANGUAGE_MAX} chars`)
+        .default(''),
+    ),
+    voiceStyle: z.preprocess(
+      personaNullToUndefined,
+      z.string({ error: 'voiceStyle must be a string' }).trim()
+        .max(PERSONA_VOICE_STYLE_MAX, `voiceStyle must be 0-${PERSONA_VOICE_STYLE_MAX} chars`)
         .default(''),
     ),
     frequency: z.enum(PERSONA_FREQUENCIES, {
@@ -603,8 +602,9 @@ export const personaSchema = z
       localColour: p.localColour,
       warmth: p.warmth,
       soul: p.soul,
-      voiceStyle: p.voiceStyle,
+      musicLean: p.musicLean,
       language: p.language,
+      voiceStyle: p.voiceStyle,
       avatar: p.avatar,
       tts: p.tts,
       skills: p.skills,
@@ -636,16 +636,18 @@ export function repairPersonaForLoad(
     id: typeof raw.id === 'string' && PERSONA_ID_RE.test(raw.id) ? raw.id : undefined,
     name: typeof raw.name === 'string' ? raw.name.trim().slice(0, PERSONA_NAME_MAX) : undefined,
     soul: typeof raw.soul === 'string' ? raw.soul.trim().slice(0, PERSONA_SOUL_MAX) : undefined,
-    voiceStyle:
-      typeof raw.voiceStyle === 'string'
-        ? raw.voiceStyle.trim().slice(0, PERSONA_VOICE_STYLE_MAX)
-        : undefined,
+    musicLean: typeof raw.musicLean === 'string'
+      ? raw.musicLean.trim().slice(0, PERSONA_MUSIC_LEAN_MAX)
+      : '',
     tagline:
       typeof raw.tagline === 'string' ? raw.tagline.trim().slice(0, PERSONA_TAGLINE_MAX) : '',
     language:
       typeof raw.language === 'string'
         ? raw.language.trim().slice(0, PERSONA_LANGUAGE_MAX)
         : undefined,
+    voiceStyle: typeof raw.voiceStyle === 'string'
+      ? raw.voiceStyle.trim().slice(0, PERSONA_VOICE_STYLE_MAX)
+      : undefined,
     frequency: (PERSONA_FREQUENCIES as readonly string[]).includes(raw.frequency as string)
       ? raw.frequency
       : 'moderate',

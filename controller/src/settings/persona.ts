@@ -59,6 +59,38 @@ export function announceLinks(persona: unknown = getEffectivePersona()): boolean
   return (persona as { linkStyle?: unknown } | null | undefined)?.linkStyle === 'announce';
 }
 
+// A private, music-specific editorial preference for track selection. It is
+// intentionally separate from Soul: Soul informs the DJ's voice, while Music
+// Leanings can only break a close tie between already eligible candidates.
+export function personaMusicLeanings(persona: unknown = getEffectivePersona()): string | null {
+  const leaning = String((persona as { musicLean?: unknown } | null | undefined)?.musicLean || '').trim();
+  return leaning || null;
+}
+
+export type GuestEditorialNudge = {
+  guest: { id: string; name: string };
+  musicalLeanings: string;
+};
+
+// Guests can occasionally add a music-specific secondary nudge. The host
+// remains the primary editorial influence, and a guest's Soul stays strictly
+// on-air character rather than programming input.
+export function guestEditorialNudgeFromGuests(
+  guests: Array<{ id?: unknown; name?: unknown; musicLean?: unknown }>,
+  random: () => number = Math.random,
+): GuestEditorialNudge | null {
+  const eligible = guests.filter((guest) => String(guest.musicLean || '').trim());
+  if (!eligible.length || random() >= 0.25) return null;
+  const guest = eligible[Math.floor(random() * eligible.length)];
+  if (!guest || typeof guest.id !== 'string' || typeof guest.name !== 'string') return null;
+  return { guest: { id: guest.id, name: guest.name }, musicalLeanings: String(guest.musicLean).trim() };
+}
+
+export function guestEditorialNudge(date: Date = new Date(), random: () => number = Math.random) {
+  if (get().llm?.guestMusicalLeanings !== true) return null;
+  return guestEditorialNudgeFromGuests(getOnAirRoster(date).guests, random);
+}
+
 // Effective track-length cap in SECONDS for the moment a pick is made, or null
 // for "no cap". A scheduled show's maxTrackSeconds (when set) overrides the
 // station default; 0 at the winning level means unlimited. This is the single
@@ -76,6 +108,17 @@ export function effectiveMaxTrackSec(
   return sec && sec > 0 ? sec : null;
 }
 
+// One policy result for selection and playback; malformed/absent mode is legacy cut.
+export function effectiveTrackLengthLimits(
+  show: { maxTrackSeconds?: unknown } | null | undefined = resolveActiveShow(),
+  s: { maxTrackSeconds?: unknown; maxTrackLengthMode?: unknown } | null | undefined = get(),
+): { selectionMaxSec: number | null; playbackMaxSec: number | null } {
+  const maxSec = effectiveMaxTrackSec(show, s);
+  return s?.maxTrackLengthMode === 'exclude'
+    ? { selectionMaxSec: maxSec, playbackMaxSec: null }
+    : { selectionMaxSec: null, playbackMaxSec: maxSec };
+}
+
 // Effective minimum track length in SECONDS for the moment a pick is made, or
 // null for "no floor" (#1573). Exactly the precedence effectiveMaxTrackSec
 // applies to the cap: a scheduled show's own floor (when set) overrides the
@@ -84,7 +127,7 @@ export function effectiveMaxTrackSec(
 // disagree about how short is too short.
 //
 // The two are NOT symmetric in what they do with the answer: the cap is an
-// on-air cue_out cut, so an over-long track stays eligible, while the floor is
+// on-air cue_out cut in legacy mode (a hard ceiling in exclude), while the floor is
 // a SELECTION filter — a 40-second interlude cannot be stretched.
 export function effectiveMinTrackSec(
   show: { minTrackLengthSeconds?: unknown } | null | undefined = resolveActiveShow(),
@@ -241,6 +284,7 @@ function resolveShowShape(show, s) {
     // optional segmentSkill pins the feature beat to one capability kind.
     programme: show.programme === true,
     segmentSkill: typeof show.segmentSkill === 'string' ? show.segmentSkill : '',
+    preparationSkill: typeof show.preparationSkill === 'string' ? show.preparationSkill : '',
   };
 }
 

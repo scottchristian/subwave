@@ -9,12 +9,12 @@ import { adminResponse } from '../../../lib/admin-query';
 import { useModelDiscovery } from '@/hooks/useModelDiscovery';
 import { useVoiceDiscovery } from '@/hooks/useVoiceDiscovery';
 import { CLOUD_VOICES, CLOUD_MODELS } from '../../../lib/cloudVoices';
-import { GEMINI_TTS_MODELS, GEMINI_TTS_VOICES } from '../../../lib/schemas.generated';
 import {
-  buildCloudVoiceGroups, isKnownCloudVoice, providerSupportsDiscovery, CUSTOM_VOICE_ID,
+  buildCloudVoiceGroups, buildGeminiVoiceGroups, isKnownCloudVoice, providerSupportsDiscovery, CUSTOM_VOICE_ID,
 } from '../../../lib/cloudVoiceGroups';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
+import { Textarea } from '../../ui/textarea';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel,
 } from '../../ui/select';
@@ -23,20 +23,29 @@ import { Advanced } from './section-chrome';
 import { EngineSelector } from '../tts/EngineSelector';
 import { CloudProviderSelector } from '../tts/CloudProviderSelector';
 import { cloudProviderLabel, resolveKeyPresence } from '../tts/cloudProviderMeta';
-import { GEMINI_CLOUD_PROVIDER, engineCategory, engineForCloudProvider } from '../tts/engineMeta';
 import { EngineVoiceFields, ENGINE_UNAVAILABLE } from '../tts/EngineVoiceFields';
 import { VoicePreviewButton } from '../tts/VoicePreviewButton';
 import { defaultEngineVoice } from '../tts/defaultVoice';
-import { ENGINE_META } from '../tts/engineMeta';
+import { ENGINE_META, GEMINI_CLOUD_PROVIDER, engineCategory } from '../tts/engineMeta';
+import { GEMINI_TTS_MODELS, TTS_GAIN_CLAMP_DB, TTS_SPEED_MIN, TTS_SPEED_MAX } from '../../../lib/schemas.generated';
+// A bound on the engine's composed prompt, not a validated vocabulary, so it is
+// not in the generated mirror — see the note in geminiLimits.ts.
+import { GEMINI_PRONUNCIATION_MAX } from '../../../lib/geminiLimits';
+// From the generated mirror, not a hand-stated copy: the bound is declared beside
+// the BCP-47 validator that enforces it, so the form's maxLength and the route's
+// refusal cannot drift apart.
+import { GEMINI_LIBRARY_LANGUAGE_MAX } from '../../../lib/schemas.generated';
 import { VoicePicker } from '../tts/VoicePicker';
+import { buildGeminiSaveBlock } from './geminiSavePayload';
+import { ELEVENLABS_VS_DEFAULTS, FISH_TTS_DEFAULTS } from './form-state';
+import { decideCloudSave } from './cloudSavePayload';
 import { ModelCombobox } from '../llm/ModelCombobox';
 import { cn } from '../../../lib/cn';
 import {
   SectionHeader, SaveBar,
-  KeyStatus, KeyTestResult, KEY_HINTS, ELEVENLABS_VS_DEFAULTS,
-  FISH_TTS_DEFAULTS,
+  KeyStatus, KeyTestResult, KEY_HINTS,
   type SectionProps, type FormState, type FormUpdater, type CloudTtsCfg,
-  type TtsFallbackForm,
+  type TtsFallbackForm, type TtsForm,
 } from './shared';
 
 // Kokoro phonemizer language labels, keyed by the controller's lang codes —
@@ -77,10 +86,7 @@ function GroupHead({ children }: { children: ReactNode }) {
 }
 
 // Engine ids match the server contract exactly — note the hyphen in `pocket-tts`.
-// Range mirrors the server clamp (TTS_GAIN_CLAMP_DB=12).
-const TTS_GAIN_ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts', 'cloud', 'remote', 'gemini'] as const;
-const TTS_GAIN_MIN = -12;
-const TTS_GAIN_MAX = 12;
+const TTS_GAIN_ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts', 'cloud', 'remote'] as const;
 const TTS_GAIN_STEP = 0.5;
 
 // Signed one-decimal dB with a real minus sign; unity prints as a bare "0 dB".
@@ -109,8 +115,8 @@ function TtsGainField({
       </div>
       <input
         type="range"
-        min={TTS_GAIN_MIN}
-        max={TTS_GAIN_MAX}
+        min={-TTS_GAIN_CLAMP_DB}
+        max={TTS_GAIN_CLAMP_DB}
         step={TTS_GAIN_STEP}
         value={value}
         onChange={(e: ChangeEvent<HTMLInputElement>) => {
@@ -131,9 +137,7 @@ function TtsGainField({
 }
 
 // Range mirrors the server clamp (clampTtsSpeed: 0.5–2.0×). Piper, Kokoro,
-// Cloud, Remote and Gemini honour speed; chatterbox/pocket-tts ignore it.
-const TTS_SPEED_MIN = 0.5;
-const TTS_SPEED_MAX = 2;
+// Cloud and Remote honour speed; chatterbox/pocket-tts ignore it.
 const TTS_SPEED_STEP = 0.05;
 const TTS_SPEED_UNSUPPORTED = new Set(['chatterbox', 'pocket-tts']);
 
@@ -180,7 +184,7 @@ function TtsSpeedField({
           ? engineId === 'remote'
             ? <>Slow down or speed up this engine. <code>1.00×</code> = no change. Remote applies this base rate locally with ffmpeg when available; persona and programme pacing compose for persona-voiced speech on air. Without ffmpeg, it uses the original audio.</>
             : <>Slow down or speed up this engine. <code>1.00×</code> = no change.</>
-          : <>Not supported by this engine: Piper, Kokoro, Cloud, Remote and Gemini honour speed.</>}
+          : <>Not supported by this engine: Piper, Kokoro, cloud and Remote honour speed.</>}
       </div>
     </div>
   );
@@ -478,11 +482,6 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
   const [cloudKeyInput, setCloudKeyInput] = useState('');
   const [cloudKeyTest, setCloudKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
   const [cloudKeyTesting, setCloudKeyTesting] = useState(false);
-  // Gemini shares the LLM section's Google key: the same
-  // GOOGLE_GENERATIVE_AI_API_KEY in state/secrets.env, same test-and-save flow.
-  const [geminiKeyInput, setGeminiKeyInput] = useState('');
-  const [geminiKeyTest, setGeminiKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
-  const [geminiKeyTesting, setGeminiKeyTesting] = useState(false);
   // Compat servers don't use the OPENAI/ELEVENLABS env keys — their optional bearer
   // is settings.tts.cloud.compatApiKey, so it rides the settings payload.
   const [compatKeyInput, setCompatKeyInput] = useState('');
@@ -497,22 +496,10 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
     && data.tts?.available?.cloudByProvider?.[form.tts.fallback.cloudProvider] === false;
 
   const isCloudEngine = form.tts.defaultEngine === 'cloud';
-  // Gemini is chosen from the Cloud provider grid but stored as its own engine
-  // id, so the panel reads that pairing in both directions: which card lights up
-  // at the top, and which provider is highlighted below. Both come from the one
-  // field, so the two can never disagree.
+  // Gemini is presented as a CLOUD PROVIDER card but keeps its own engine id,
+  // so both panels are live at once — this is what keeps them tied to one
+  // stored field instead of two that can disagree.
   const geminiSelected = form.tts.defaultEngine === GEMINI_CLOUD_PROVIDER;
-  // Gemini has no cloud.voice / cloud.model / base URL — it is a direct Google
-  // call — so picking it must not run through selectCloudProvider, which
-  // rewrites those fields and would hand Gemini a Fish Audio voice id.
-  const selectTtsProvider = (provider: string) => setForm(f => {
-    const engine = engineForCloudProvider(provider);
-    if (engine === GEMINI_CLOUD_PROVIDER) {
-      return { ...f, tts: { ...f.tts, defaultEngine: engine } };
-    }
-    const base = selectCloudProvider(f, provider);
-    return { ...base, tts: { ...base.tts, defaultEngine: engine } };
-  });
   const isCompat = form.tts.cloud.provider === 'openai-compatible';
   const isFish = form.tts.cloud.provider === 'fish-audio';
   const ttsKeyVar = envKeyForCloudProvider(form.tts.cloud.provider);
@@ -589,53 +576,21 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
       setCloudKeyTesting(false);
     }
   };
-  const testGeminiKey = async () => {
-    const hasTyped = !!geminiKeyInput.trim();
-    if (!hasTyped && !data.env?.['GOOGLE_GENERATIVE_AI_API_KEY']) return;
-    setGeminiKeyTesting(true);
-    setGeminiKeyTest(null);
-    try {
-      const r = await adminFetch('/settings/secrets/test', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: 'GOOGLE_GENERATIVE_AI_API_KEY', value: geminiKeyInput.trim() }),
-      });
-      const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
-      setGeminiKeyTest(j);
-      if (j.ok && hasTyped) {
-        const saved = await saveKey('GOOGLE_GENERATIVE_AI_API_KEY', geminiKeyInput);
-        if (saved) { notify.ok('Key verified and saved'); setGeminiKeyInput(''); refresh(); }
-      } else if (j.ok) {
-        notify.ok('Key verified (on file)');
-      }
-    } catch (e) {
-      setGeminiKeyTest({ ok: false, message: errorMessage(e), latencyMs: 0 });
-    } finally {
-      setGeminiKeyTesting(false);
-    }
-  };
-  // Gemini is filtered out here rather than from the controller's list: the
-  // dispatcher still reports `gemini` because a stored persona may name it,
-  // but it is chosen from the Cloud provider grid instead of its own card.
+  // The engine grid is fed by the CONTROLLER's tts.engines, which is ENGINES and
+  // therefore includes gemini. Gemini is a PROVIDER card here, so it is filtered
+  // out at the point of use rather than removed from the shared list — that list
+  // also backs the fallback slot and the per-engine gainDb/speed maps, which all
+  // need the real engine id.
   const engines = (data.tts?.engines || ['piper']).filter(e => e !== GEMINI_CLOUD_PROVIDER);
   const available = data.tts?.available || {};
-  // While Gemini speaks, cloud.provider is whatever was last chosen for a real
-  // cloud provider and says nothing about this engine — asking about it put a
-  // "no key" badge on the Cloud card directly above a Gemini card reading
-  // "key set".
-  const providerCloudReady = geminiSelected
-    ? available.gemini
-    : isCompat
-      ? !!(form.tts.cloud.baseUrl.trim() && form.tts.cloud.model.trim())
-      : available.cloudByProvider?.[form.tts.cloud.provider];
+  const providerCloudReady = isCompat
+    ? !!(form.tts.cloud.baseUrl.trim() && form.tts.cloud.model.trim())
+    : available.cloudByProvider?.[form.tts.cloud.provider];
   const selectorAvailable = providerCloudReady === undefined
     ? available
     : { ...available, cloud: providerCloudReady };
   // engineMeta.ts is the one label table (it already backs EngineSelector).
-  // Gemini is a Cloud PROVIDER rather than an ENGINES entry, so ENGINE_META has
-  // nothing for it and it would render as a bare lowercase id.
-  const engineLabelOf = (id: string) => ENGINE_META[id]?.label
-    || (id === GEMINI_CLOUD_PROVIDER ? cloudProviderLabel(GEMINI_CLOUD_PROVIDER) : id);
+  const engineLabelOf = (id: string) => ENGINE_META[id]?.label || id;
 
   // Send (and dirty-check) what the controller will actually store: trimmed,
   // with untouched blank rows dropped. Otherwise an operator who presses "Add
@@ -662,14 +617,24 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
       }
     }
 
+    // ONE decision, taken once. It used to be re-derived in three places — the
+    // payload's provider, the inline-key comparison, and the blank model/voice
+    // — which agreed on a healthy form and diverged on a stale one. See
+    // cloudSavePayload.ts: a stale provider id both erased the stored inline key
+    // and sent a blank `tts.cloud.model`, which the controller rejects for every
+    // provider, 400-ing the whole save.
     const savedCloudProvider = String(data.values?.tts?.cloud?.provider || '');
-    const clearInlineCloudKey = isFish
-      || (!!savedCloudProvider && savedCloudProvider !== form.tts.cloud.provider);
+    const cloudSave = decideCloudSave({
+      provider: form.tts.cloud.provider,
+      model: form.tts.cloud.model,
+      voice: form.tts.cloud.voice,
+      savedProvider: savedCloudProvider,
+      isFish,
+    });
+    const clearInlineCloudKey = cloudSave.clearInlineKey;
     // Redacted sentinel: 'set' means an inline key is on file in settings.json.
     const hadStoredInlineKey = data.values?.tts?.cloud?.apiKey === 'set';
     const settingsSaved = await saveSettings({
-      djSpeakClock: form.djSpeakClock,
-      handover: { offsetMinutes: Number(form.handoverOffsetMinutes) },
       tts: {
         enabled: form.tts.enabled,
         defaultEngine: form.tts.defaultEngine,
@@ -677,17 +642,19 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
         kokoro: { voice: form.tts.kokoro?.voice, lang: form.kokoroLang },
         chatterbox: { referenceVoice: form.tts.chatterbox?.referenceVoice ?? '' },
         pocketTts: { voice: form.tts.pocketTts?.voice ?? 'alba' },
-        gemini: {
-          // '' is sent verbatim: it is the "walk the fallback chain" choice,
-          // not a blank field for the server to fill in.
-          model: form.tts.gemini?.model ?? '',
-          voice: form.tts.gemini?.voice ?? 'Puck',
-        },
+        gemini: buildGeminiSaveBlock(form.tts.gemini),
         cloud: {
           enabled: true,
-          provider: form.tts.cloud.provider,
-          model: form.tts.cloud.model,
-          voice: form.tts.cloud.voice,
+          // Never send `gemini` here. selectCloudProvider routes it to
+          // defaultEngine instead, but a form hydrated from an older build could
+          // still carry it, and one stray value 400s the whole save — including
+          // the unrelated LLM and pool settings the operator was there to change.
+          provider: cloudSave.provider,
+          // Omitted rather than sent blank when the form has none: the
+          // controller rejects a blank model for every provider, and omitting
+          // leaves it holding the value it already has.
+          ...(cloudSave.model !== undefined ? { model: cloudSave.model } : {}),
+          ...(cloudSave.voice !== undefined ? { voice: cloudSave.voice } : {}),
           baseUrl: form.tts.cloud.baseUrl,
           voiceStability: form.tts.cloud.voiceStability,
           voiceStyle: form.tts.cloud.voiceStyle,
@@ -726,6 +693,15 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
   };
 
   const selectCloudProvider = (f: FormState, provider: string): FormState => {
+    // Gemini is SELECTED as a provider card but is an ENGINE, not a
+    // `tts.cloud.provider` value: the controller's TTS_CLOUD_PROVIDERS enum is
+    // the four real cloud providers and refuses `gemini`, so persisting it here
+    // made every save 400 with "tts.cloud.provider must be one of: …". Its
+    // identity is carried by `tts.defaultEngine` (GEMINI_CLOUD_PROVIDER is the
+    // engine id too), and its settings live under `tts.gemini`.
+    if (provider === GEMINI_CLOUD_PROVIDER) {
+      return { ...f, tts: { ...f.tts, defaultEngine: GEMINI_CLOUD_PROVIDER } };
+    }
     const provVoices = CLOUD_VOICES[provider as keyof typeof CLOUD_VOICES] || [];
     // Switching provider invalidates the old provider-specific ids; re-entering
     // the already-selected engine preserves manual/custom values.
@@ -768,7 +744,10 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
     kokoro?: { voice?: string; lang?: string };
     chatterbox?: { referenceVoice?: string };
     pocketTts?: { voice?: string };
-    gemini?: { model?: string; voice?: string };
+    // The Gemini block, absent from this hand-written shape until now — which is
+    // why no Gemini field appeared in `ttsDirty`. Kept in step with the save
+    // payload in geminiSavePayload.ts.
+    gemini?: { model?: string; voice?: string; pronunciation?: string; libraryLanguage?: string };
     cloud?: SavedCloud;
     remote?: { url?: string };
     gainDb?: Record<string, number>;
@@ -780,8 +759,13 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
   const savedChatterboxVoice: string = savedTts.chatterbox?.referenceVoice || '';
   const savedPocketTtsVoice: string = savedTts.pocketTts?.voice || '';
   const savedCloud: SavedCloud = savedTts.cloud || {};
-  const savedGeminiModel: string = savedTts.gemini?.model || '';
-  const savedGeminiVoice: string = savedTts.gemini?.voice || 'Puck';
+  // The whole Gemini block, not just the newest field. `ttsDirty` drives the
+  // "Your edits below aren't live until you Save" banner, so a field missing from
+  // it is a field the operator can change and be told is already saved. Every
+  // Gemini control on this panel writes through `save()`; none of them were
+  // listed here, which is why libraryLanguage could be edited and described as
+  // live while the banner stayed clean.
+  const savedGemini = savedTts.gemini || {};
   const savedRemoteUrl: string = savedTts.remote?.url || '';
   const savedEngineLabel = engineLabelOf(savedEngine);
   const formEngineLabel = engineLabelOf(form.tts.defaultEngine);
@@ -805,10 +789,6 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
     // Absent reads as ON, matching the controller's coercion — so an untouched
     // pre-upgrade settings.json never shows up as dirty.
     form.tts.enabled !== (savedTts.enabled !== false)
-    // Absent reads as ON.
-    || form.djSpeakClock !== (data.values?.djSpeakClock !== false)
-    // Absent reads as the default, which is what the controller stores for it.
-    || form.handoverOffsetMinutes !== String(data.values?.handover?.offsetMinutes ?? 5)
     || form.tts.defaultEngine !== savedEngine
     || (form.tts.kokoro?.voice || '') !== savedKokoroVoice
     || (form.kokoroLang || '') !== savedKokoroLang
@@ -826,8 +806,12 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
     || form.tts.cloud.temperature !== (savedCloud.temperature ?? FISH_TTS_DEFAULTS.temperature)
     || form.tts.cloud.topP !== (savedCloud.topP ?? FISH_TTS_DEFAULTS.topP)
     || form.tts.cloud.latency !== (savedCloud.latency ?? FISH_TTS_DEFAULTS.latency)
-    || (form.tts.gemini?.model || '').trim() !== savedGeminiModel
-    || (form.tts.gemini?.voice || '') !== savedGeminiVoice
+    // `?? ''` on every side: an absent saved value and an empty control are the
+    // same state, so an untouched pre-upgrade settings.json is not dirty.
+    || (form.tts.gemini?.model || '') !== (savedGemini.model ?? '')
+    || (form.tts.gemini?.voice || '') !== (savedGemini.voice ?? '')
+    || (form.tts.gemini?.pronunciation || '') !== (savedGemini.pronunciation ?? '')
+    || (form.tts.gemini?.libraryLanguage || '') !== (savedGemini.libraryLanguage ?? '')
     || (form.tts.remote.url || '').trim() !== savedRemoteUrl
     || gainDirty
     || speedDirty;
@@ -910,51 +894,6 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
           </p>
         </div>
 
-        <div className="field mt-6">
-          <Label>Station clock</Label>
-          <Seg
-            value={form.djSpeakClock ? 'on' : 'off'}
-            options={[
-              { id: 'on', label: 'On', title: 'The DJ can read the time of day on air' },
-              { id: 'off', label: 'Off', title: 'The DJ will never read the time of day on air' },
-            ]}
-            onChange={v => setForm(f => ({ ...f, djSpeakClock: v === 'on' }))}
-          />
-          <p className="mt-2 text-[13px] leading-[1.55] text-muted">
-            {form.djSpeakClock ? (
-              <>
-                The DJ may nod to the local time during links, idents, hand-overs, ad-libs, banter, or programme beats. The hourly top-of-the-hour time check will also fire automatically.
-              </>
-            ) : (
-              <>
-                Keeps the wall clock out of the DJ's mouth. The automatic top-of-the-hour time check is disabled, and the DJ will no longer mention the time of day in ordinary links. Daypart vibes (like "after dark" or "weekend") will still be mentioned to set the mood, but exact numerals are dropped.
-              </>
-            )}
-          </p>
-        </div>
-
-        <div className="field mt-6">
-          <Label>Show handover</Label>
-          <Seg
-            value={form.handoverOffsetMinutes}
-            options={[
-              { id: '5', label: '5 min', title: 'The outgoing host signs off at :55' },
-              { id: '10', label: '10 min', title: 'The outgoing host signs off at :50' },
-              { id: '15', label: '15 min', title: 'The outgoing host signs off at :45' },
-              { id: '20', label: '20 min', title: 'The outgoing host signs off at :40' },
-            ]}
-            onChange={v => setForm(f => ({ ...f, handoverOffsetMinutes: v }))}
-          />
-          <p className="mt-2 text-[13px] leading-[1.55] text-muted">
-            How long before a show ends the outgoing host <strong>signs off</strong> — the
-            programme outro, at :{60 - Number(form.handoverOffsetMinutes)} of the show&apos;s
-            final hour. Whatever you pick, the incoming host waits for{' '}
-            <strong>one closing track</strong> before opening, so the changeover is never two
-            voices back to back. Only whole 5-minute steps: the sign-off is placed on the
-            station&apos;s clock and checked every five minutes, so anything in between
-            would be a slot that never comes round.
-          </p>
-        </div>
       </Card>
 
       <Card title="Voice engine" sub="active default">
@@ -980,8 +919,11 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
               {ttsDirty && <Pill tone="accent" dot>unsaved</Pill>}
             </div>
             <EngineSelector
-              // Gemini is a Cloud provider, so it highlights the Cloud card rather
-              // than disappearing from the grid entirely.
+              // Highlight through the CATEGORY, not the raw id: Gemini keeps its
+              // own engine id but has no card of its own, so passing the id
+              // straight through would light nothing and read as a missing
+              // engine. Same pair (engineCategory/engineForCloudProvider) the
+              // persona slot uses.
               value={engineCategory(form.tts.defaultEngine)}
               engineIds={engines}
               available={selectorAvailable}
@@ -1200,9 +1142,111 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
           </>
         )}
 
-        {(form.tts.defaultEngine === 'cloud' || geminiSelected) && (() => {
-          // Gemini is appended here rather than served by the controller: it is not
-          // a cloud provider, so it never appears in tts.cloudProviders.
+        {geminiSelected && (() => {
+          const geminiAvail = data.tts?.available?.gemini;
+          // Keyed off the shared TtsForm shape rather than restating the three
+          // fields inline — restating it is how the next gemini field becomes a
+          // type error in exactly one of the two places that has to know it.
+          const setGemini = (patch: Partial<TtsForm['gemini']>) =>
+            setForm(f => ({
+              ...f,
+              tts: { ...f.tts, gemini: { ...f.tts.gemini, ...patch } },
+            }));
+          return (
+            <div className="mt-4 grid gap-[26px]">
+              <div className="field">
+                <Label>Connection</Label>
+                <KeyStatus envVar="GOOGLE_GENERATIVE_AI_API_KEY" present={!!data.env?.['GOOGLE_GENERATIVE_AI_API_KEY']} />
+                <div className="field-hint">
+                  The same Google key as the LLM section above — one credential covers
+                  both. A gateway or compatibility-server bearer is not a substitute:
+                  Google rejects one with <code>API_KEY_INVALID</code>.
+                </div>
+                {geminiAvail === false && (
+                  <div className="mt-2 border border-[var(--danger)] px-3 py-2.5 text-[11px] leading-[1.6] text-[var(--danger)]">
+                    Gemini TTS can&apos;t speak right now — no Google key. Add it under
+                    Connect → Secrets, then restart the controller.
+                  </div>
+                )}
+              </div>
+              <div className="field">
+                <Label>Model</Label>
+                <Select value={form.tts.gemini?.model || ''} onValueChange={v => setGemini({ model: v })}>
+                  <SelectTrigger aria-label="Gemini model" className="max-w-[360px]"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {/* An empty value selects the server's fallback chain. */}
+                    <SelectItem value="">Automatic (fallback chain)</SelectItem>
+                    {GEMINI_TTS_MODELS.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <div className="field-hint">
+                  Which Google TTS model renders speech. <strong>Automatic</strong> walks the
+                  engine&apos;s own chain and retries the next model on failure, so it keeps
+                  working if a model is rate-limited or withdrawn.
+                </div>
+              </div>
+              <div className="field">
+                <Label>Default voice</Label>
+                <VoicePicker
+                  value={form.tts.gemini?.voice || ''}
+                  onChange={v => setGemini({ voice: v })}
+                  groups={buildGeminiVoiceGroups()}
+                  title="Gemini default voice"
+                  placeholder="Select a voice"
+                  preview={{
+                    engine: 'gemini',
+                    geminiModel: form.tts.gemini?.model || undefined,
+                    speed: form.tts.speed?.gemini ?? 1,
+                    adminFetch,
+                  }}
+                />
+                <div className="field-hint">
+                  The station-wide Gemini voice. A persona that names its own voice still
+                  overrides this; one that leaves it blank — or that follows the station
+                  default — inherits it, which is why this is a floor and not a lock.
+                </div>
+              </div>
+              <div className="field">
+                <Label>Voice library default language</Label>
+                <Input
+                  aria-label="Gemini voice library default language"
+                  value={form.tts.gemini?.libraryLanguage || ''}
+                  maxLength={GEMINI_LIBRARY_LANGUAGE_MAX}
+                  placeholder="en-AU — or blank for every language"
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setGemini({ libraryLanguage: e.target.value })}
+                  className="max-w-[360px] font-mono text-[13px]"
+                />
+                <div className="field-hint">
+                  Which page of Google&apos;s voice library the persona voice cards open on —
+                  a browsing default, <strong>not</strong> a limit. A persona can still pick any
+                  voice on any page. Gemini takes its accent from the voice itself, so this is
+                  never sent to the engine. Leave blank to browse every language.
+                </div>
+              </div>
+              <div className="field">
+                <Label>Pronunciation notes</Label>
+                <Textarea
+                  value={form.tts.gemini?.pronunciation || ''}
+                  onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setGemini({ pronunciation: e.target.value })}
+                  rows={3}
+                  maxLength={GEMINI_PRONUNCIATION_MAX}
+                  placeholder="Sook rhymes with look; Launceston sounds like LON-sess-tun"
+                  className="max-w-[520px] font-mono text-[13px]"
+                />
+                <div className="field-hint">
+                  Free text, your station only — nothing here ships enabled for anyone else.
+                  Appended to the delivery prompt on every Gemini render, so use it for
+                  words the model gets wrong: place names, local spellings, names and
+                  product terms. It sits behind each persona&apos;s own voice style, so a
+                  persona&apos;s delivery is never crowded out by it. Up to{' '}
+                  {GEMINI_PRONUNCIATION_MAX} characters.
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {isCloudEngine && !geminiSelected && (() => {
           const providerIds = [...new Set([
             ...(data.tts?.cloudProviders || ['openai', 'elevenlabs', 'fish-audio', 'openai-compatible']),
             GEMINI_CLOUD_PROVIDER,
@@ -1216,21 +1260,17 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
             <div className="field">
               <Label>Provider</Label>
               <CloudProviderSelector
-                value={geminiSelected ? GEMINI_CLOUD_PROVIDER : form.tts.cloud.provider}
+                value={form.tts.cloud.provider}
                 providerIds={providerIds}
                 availability={{
                   cloudByProvider: resolveKeyPresence(providerIds, available.cloudByProvider, data.env),
                   compatBaseUrlSet: !!form.tts.cloud.baseUrl.trim(),
-                // EngineAvailability's index signature is a union, so narrow it: a non-boolean
-                // must stay undefined or the badge would claim "no key" before the
-                // controller has ever been asked.
-                gemini: typeof available.gemini === 'boolean' ? available.gemini : undefined,
                 }}
-                onChange={selectTtsProvider}
+                onChange={v => setForm(f => selectCloudProvider(f, v))}
                 // Connection is the very next block, and it carries its own
                 // KeyStatus — a "next step" note here would just bounce the eye.
                 enableHint={false}
-                gridClassName="md:grid-cols-5"
+                gridClassName="md:grid-cols-4"
                 hint={<>
                   Which service renders Cloud speech. Each provider keeps its own
                   key, model and voice, so switching here doesn’t carry the last
@@ -1238,351 +1278,248 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                 </>}
               />
             </div>
-        {geminiSelected && (
-          <div className="mt-4">
-            {available.gemini === false && (
-              <div className="mb-3.5 border border-[var(--danger)] px-3 py-2.5 text-[11px] leading-[1.6] text-[var(--danger)]">
-                No Google API key is configured. Add it below — the engine falls
-                back to <strong>Piper</strong> until it&apos;s set.
-              </div>
-            )}
-            <div className="field">
-              <Label>Google (Gemini) API key</Label>
-              <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
-                <Input
-                  type="password"
-                  autoComplete="off"
-                  value={geminiKeyInput}
-                  placeholder={data.env?.['GOOGLE_GENERATIVE_AI_API_KEY'] ? '•••••• (on file)' : ''}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) => setGeminiKeyInput(e.target.value)}
-                  className="max-w-[360px]"
-                />
-                <Btn
-                  onClick={testGeminiKey}
-                  disabled={geminiKeyTesting || (!geminiKeyInput.trim() && !data.env?.['GOOGLE_GENERATIVE_AI_API_KEY'])}
-                >
-                  {geminiKeyTesting ? 'Testing…' : 'Test key'}
-                </Btn>
-              </div>
-              <div className="field-hint">
-                Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
-                This is the same key as the LLM section&apos;s Google provider — one key serves both.
-              </div>
-              {geminiKeyTest && <KeyTestResult result={geminiKeyTest} />}
-              <KeyStatus envVar="GOOGLE_GENERATIVE_AI_API_KEY" present={!!data.env?.['GOOGLE_GENERATIVE_AI_API_KEY']} />
-            </div>
-            <div className="field">
-              <Label>Model</Label>
-              <Select
-                value={form.tts.gemini?.model || ''}
-                onValueChange={model => setForm(f => ({
-                  ...f,
-                  tts: { ...f.tts, gemini: { ...f.tts.gemini, model } },
-                }))}
-              >
-                <SelectTrigger aria-label="Gemini TTS model" className="max-w-[360px]">
-                  <SelectValue placeholder="Automatic (fallback chain)" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {/* Empty is a real choice, not "unset": it keeps the engine's own
-                        chain, so a model Google retires cannot leave the station mute. */}
-                    <SelectItem value="">Automatic (fallback chain)</SelectItem>
-                    {GEMINI_TTS_MODELS.map(m => (
-                      <SelectItem key={m} value={m}>{m}</SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-              <div className="field-hint">
-                Which Google TTS model renders speech. <strong>Automatic</strong> walks
-                the engine&apos;s own chain and retries the next model on failure, so it
-                keeps working if a model is rate-limited or withdrawn.
-              </div>
-            </div>
-            <div className="field">
-              <Label>Default voice</Label>
-              <VoicePicker
-                value={form.tts.gemini?.voice || ''}
-                onChange={voice => setForm(f => ({
-                  ...f,
-                  tts: { ...f.tts, gemini: { ...f.tts.gemini, voice } },
-                }))}
-                groups={[{
-                  label: 'Google prebuilt',
-                  voices: GEMINI_TTS_VOICES.map(v => ({ id: v, label: v })),
-                }]}
-                title="Gemini default voice"
-                placeholder="Select a voice"
-                preview={{
-                  engine: 'gemini',
-                  voice: form.tts.gemini?.voice || '',
-                  model: form.tts.gemini?.model || undefined,
-                  speed: form.tts.speed?.gemini ?? 1,
-                  adminFetch,
-                }}
-              />
-              <div className="field-hint">
-                The station-wide Gemini voice. A persona that names its own voice still
-                overrides this; one that leaves it blank inherits it, which is why this
-                is a floor and not a lock.
-              </div>
-            </div>
-            <TtsGainField engineId="gemini" form={form} setForm={setForm} />
-            <TtsSpeedField engineId="gemini" form={form} setForm={setForm} />
-          </div>
-        )}
-                {/* Everything below this point is cloud-only: the connection block,
-                    the model, the provider voice and the provider knobs. Gemini has
-                    none of them — it is a direct Google call with its own key field
-                    above — so rendering them under a Gemini selection showed an
-                    OpenAI connection form the operator never chose. */}
-                {!geminiSelected && (
+
+            <div className="grid gap-3.5">
+              <GroupHead>Connection</GroupHead>
+              {isCompat && (
+                <div className="field">
+                  <Label>Server base URL</Label>
+                  <Input
+                    value={form.tts.cloud.baseUrl}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, baseUrl: e.target.value } } }))
+                    }
+                    placeholder="http://192.168.1.101:5000/v1"
+                    className="max-w-[360px]"
+                  />
+                  <div className="field-hint">
+                    Any OpenAI-compatible TTS server (Chatterbox, Qwen3 TTS,
+                    VibeVoice, …) that exposes <code>/v1/audio/speech</code>,
+                    including the <code>/v1</code> suffix. Must be reachable from the
+                    controller container. Use the host’s LAN or Tailscale IP, not
+                    <code>127.0.0.1</code>.
+                  </div>
+                </div>
+              )}
+              {!isCompat && (() => {
+                const cloudKeyVar = envKeyForCloudProvider(form.tts.cloud.provider);
+                return (
                   <>
-
-              <div className="grid gap-3.5">
-                <GroupHead>Connection</GroupHead>
-                {isCompat && (
-                  <div className="field">
-                    <Label>Server base URL</Label>
-                    <Input
-                      value={form.tts.cloud.baseUrl}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                        setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, baseUrl: e.target.value } } }))
-                      }
-                      placeholder="http://192.168.1.101:5000/v1"
-                      className="max-w-[360px]"
-                    />
-                    <div className="field-hint">
-                      Any OpenAI-compatible TTS server (Chatterbox, Qwen3 TTS,
-                      VibeVoice, …) that exposes <code>/v1/audio/speech</code>,
-                      including the <code>/v1</code> suffix. Must be reachable from the
-                      controller container. Use the host’s LAN or Tailscale IP, not
-                      <code>127.0.0.1</code>.
-                    </div>
-                  </div>
-                )}
-                {!isCompat && (() => {
-                  const cloudKeyVar = envKeyForCloudProvider(form.tts.cloud.provider);
-                  return (
-                    <>
-                      <div className="field">
-                        <Label>{cloudProviderLabel(form.tts.cloud.provider)} API key</Label>
-                        <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
-                          <Input
-                            type="password"
-                            autoComplete="off"
-                            value={cloudKeyInput}
-                            placeholder={data.env?.[cloudKeyVar] ? '•••••• (on file)' : (KEY_HINTS[cloudKeyVar] ?? '')}
-                            onChange={(e: ChangeEvent<HTMLInputElement>) => setCloudKeyInput(e.target.value)}
-                            className="max-w-[360px]"
-                          />
-                          <Btn
-                            onClick={testCloudKey}
-                            disabled={cloudKeyTesting || (!cloudKeyInput.trim() && !data.env?.[cloudKeyVar])}
-                          >
-                            {cloudKeyTesting ? 'Testing…' : 'Test key'}
-                          </Btn>
-                        </div>
-                        <div className="field-hint">
-                          Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
-                        </div>
-                        {cloudKeyVar === 'OPENAI_API_KEY' && (
-                          <div className="field-hint">
-                            This key is shared across LLM and Cloud TTS.
-                          </div>
-                        )}
-                      </div>
-                      {cloudKeyTest && <KeyTestResult result={cloudKeyTest} />}
-                      <KeyStatus envVar={cloudKeyVar} present={!!data.env?.[cloudKeyVar]} />
-                    </>
-                  );
-                })()}
-                {isCompat && (
-                  <div className="field">
-                    <Label>API key</Label>
-                    <Input
-                      type="password"
-                      autoComplete="off"
-                      value={compatKeyInput}
-                      placeholder={savedCloud.apiKey === 'set' ? '•••••• (on file)' : 'Optional'}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatKeyInput(e.target.value)}
-                      className="max-w-[360px]"
-                    />
-                    <div className="field-hint">
-                      Optional, only if your server requires one (e.g. SUB/WAVE DJ
-                      Brain); most self-hosted servers accept any non-empty key.
-                      Blank keeps the existing key. Saved with these settings, takes
-                      effect immediately.
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="grid gap-3.5">
-                <GroupHead>Model &amp; voice</GroupHead>
-                <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-[18px]">
-                  <div className="field">
-                    <Label>Model</Label>
-                    <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
-                      {isFish ? (
-                        <>
-                          <Input
-                            list="fish-audio-models"
-                            value={form.tts.cloud.model}
-                            maxLength={100}
-                            onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                              setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: e.target.value } } }))
-                            }
-                            placeholder="s2.1-pro"
-                            className="max-w-[360px]"
-                          />
-                          <datalist id="fish-audio-models">
-                            {CLOUD_MODELS['fish-audio'].map(model => <option key={model} value={model} />)}
-                          </datalist>
-                        </>
-                      ) : ttsDiscovery.models.length > 0 ? (
-                        <ModelCombobox
-                          models={ttsDiscovery.models}
-                          value={form.tts.cloud.model}
-                          onChange={v => setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: v } } }))}
-                          placeholder="Select a model"
-                        />
-                      ) : (
+                    <div className="field">
+                      <Label>{cloudProviderLabel(form.tts.cloud.provider)} API key</Label>
+                      <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
                         <Input
+                          type="password"
+                          autoComplete="off"
+                          value={cloudKeyInput}
+                          placeholder={data.env?.[cloudKeyVar] ? '•••••• (on file)' : (KEY_HINTS[cloudKeyVar] ?? '')}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => setCloudKeyInput(e.target.value)}
+                          className="max-w-[360px]"
+                        />
+                        <Btn
+                          onClick={testCloudKey}
+                          disabled={cloudKeyTesting || (!cloudKeyInput.trim() && !data.env?.[cloudKeyVar])}
+                        >
+                          {cloudKeyTesting ? 'Testing…' : 'Test key'}
+                        </Btn>
+                      </div>
+                      <div className="field-hint">
+                        Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
+                      </div>
+                      {cloudKeyVar === 'OPENAI_API_KEY' && (
+                        <div className="field-hint">
+                          This key is shared across LLM and Cloud TTS.
+                        </div>
+                      )}
+                    </div>
+                    {cloudKeyTest && <KeyTestResult result={cloudKeyTest} />}
+                    <KeyStatus envVar={cloudKeyVar} present={!!data.env?.[cloudKeyVar]} />
+                  </>
+                );
+              })()}
+              {isCompat && (
+                <div className="field">
+                  <Label>API key</Label>
+                  <Input
+                    type="password"
+                    autoComplete="off"
+                    value={compatKeyInput}
+                    placeholder={savedCloud.apiKey === 'set' ? '•••••• (on file)' : 'Optional'}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatKeyInput(e.target.value)}
+                    className="max-w-[360px]"
+                  />
+                  <div className="field-hint">
+                    Optional, only if your server requires one (e.g. SUB/WAVE DJ
+                    Brain); most self-hosted servers accept any non-empty key.
+                    Blank keeps the existing key. Saved with these settings, takes
+                    effect immediately.
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="grid gap-3.5">
+              <GroupHead>Model &amp; voice</GroupHead>
+              <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-[18px]">
+                <div className="field">
+                  <Label>Model</Label>
+                  <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
+                    {isFish ? (
+                      <>
+                        <Input
+                          list="fish-audio-models"
                           value={form.tts.cloud.model}
+                          maxLength={100}
                           onChange={(e: ChangeEvent<HTMLInputElement>) =>
                             setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: e.target.value } } }))
                           }
-                          placeholder={
-                            isCompat
-                              ? 'chatterbox'
-                              : (CLOUD_MODELS[form.tts.cloud.provider as keyof typeof CLOUD_MODELS]?.[0] || 'gpt-4o-mini-tts')
-                          }
+                          placeholder="s2.1-pro"
                           className="max-w-[360px]"
                         />
-                      )}
-                      {ttsDiscovery.loading
-                        ? <span className="animate-pulse text-[11px] whitespace-nowrap text-muted">discovering…</span>
-                        : ttsDiscoveryEnabled && (
-                          <Btn onClick={ttsDiscovery.refresh} title="Refresh model list">↻</Btn>
-                        )
-                      }
-                    </div>
-                    <div className="field-hint">
-                      {isFish
-                        ? <>Use <code>s2.1-pro</code> for the full model or <code>s2.1-pro-free</code> for the free tier. You can also type a custom Fish model id.</>
-                        : ttsDiscovery.models.length > 0
-                          ? `${ttsDiscovery.models.length} model${ttsDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.`
-                        : !ttsDiscoveryEnabled
-                          ? (isCompat
-                              ? 'Set a base URL above to discover available models.'
-                              : 'Set an API key above to discover and select a model.')
-                          : ttsDiscovery.error
-                            ? `Discovery failed: ${ttsDiscovery.error}. Type a model ID manually.`
-                            : ttsDiscovery.loading
-                              ? 'Discovering models…'
-                              : (isCompat
-                                  ? 'Model id exactly as the server reports it at /v1/models, required.'
-                                  : 'e.g. "gpt-4o-mini-tts" (OpenAI) or "eleven_flash_v2_5" (ElevenLabs).')}
-                    </div>
-                  </div>
-                  {(() => {
-                    const provider = form.tts.cloud.provider;
-                    const voice = form.tts.cloud.voice.trim();
-                    const isPreset = isKnownCloudVoice(provider, discoveredVoices, voice);
-                    const setVoice = (v: string) =>
-                      setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, voice: v } } }));
-                    // A compat server that advertised no voices leaves nothing to pick
-                    // from — keep the plain text box it had before discovery.
-                    const hasList = discoveredVoices.length > 0 || !isCompat;
-                    if (!hasList) {
-                      return (
-                        <div className="field">
-                          <Label>Default voice</Label>
-                          <Input
-                            value={form.tts.cloud.voice}
-                            maxLength={100}
-                            placeholder="Server-specific (cloning ref or speaker id)"
-                            onChange={(e: ChangeEvent<HTMLInputElement>) => setVoice(e.target.value)}
-                          />
-                          <div className="field-hint">
-                            {voiceDiscovery.loading
-                              ? 'Checking the server for a voice list…'
-                              : <>Server-specific: Chatterbox cloning ref name, Qwen3
-                                  speaker id, etc. Leave blank to let the server pick its
-                                  own default.</>}
-                          </div>
-                        </div>
-                      );
+                        <datalist id="fish-audio-models">
+                          {CLOUD_MODELS['fish-audio'].map(model => <option key={model} value={model} />)}
+                        </datalist>
+                      </>
+                    ) : ttsDiscovery.models.length > 0 ? (
+                      <ModelCombobox
+                        models={ttsDiscovery.models}
+                        value={form.tts.cloud.model}
+                        onChange={v => setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: v } } }))}
+                        placeholder="Select a model"
+                      />
+                    ) : (
+                      <Input
+                        value={form.tts.cloud.model}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                          setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: e.target.value } } }))
+                        }
+                        placeholder={
+                          isCompat
+                            ? 'chatterbox'
+                            : (CLOUD_MODELS[form.tts.cloud.provider as keyof typeof CLOUD_MODELS]?.[0] || 'gpt-4o-mini-tts')
+                        }
+                        className="max-w-[360px]"
+                      />
+                    )}
+                    {ttsDiscovery.loading
+                      ? <span className="animate-pulse text-[11px] whitespace-nowrap text-muted">discovering…</span>
+                      : ttsDiscoveryEnabled && (
+                        <Btn onClick={ttsDiscovery.refresh} title="Refresh model list">↻</Btn>
+                      )
                     }
+                  </div>
+                  <div className="field-hint">
+                    {isFish
+                      ? <>Use <code>s2.1-pro</code> for the full model or <code>s2.1-pro-free</code> for the free tier. You can also type a custom Fish model id.</>
+                      : ttsDiscovery.models.length > 0
+                        ? `${ttsDiscovery.models.length} model${ttsDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.`
+                      : !ttsDiscoveryEnabled
+                        ? (isCompat
+                            ? 'Set a base URL above to discover available models.'
+                            : 'Set an API key above to discover and select a model.')
+                        : ttsDiscovery.error
+                          ? `Discovery failed: ${ttsDiscovery.error}. Type a model ID manually.`
+                          : ttsDiscovery.loading
+                            ? 'Discovering models…'
+                            : (isCompat
+                                ? 'Model id exactly as the server reports it at /v1/models, required.'
+                                : 'e.g. "gpt-4o-mini-tts" (OpenAI) or "eleven_flash_v2_5" (ElevenLabs).')}
+                  </div>
+                </div>
+                {(() => {
+                  const provider = form.tts.cloud.provider;
+                  const voice = form.tts.cloud.voice.trim();
+                  const isPreset = isKnownCloudVoice(provider, discoveredVoices, voice);
+                  const setVoice = (v: string) =>
+                    setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, voice: v } } }));
+                  // A compat server that advertised no voices leaves nothing to pick
+                  // from — keep the plain text box it had before discovery.
+                  const hasList = discoveredVoices.length > 0 || !isCompat;
+                  if (!hasList) {
                     return (
                       <div className="field">
                         <Label>Default voice</Label>
-                        <div className="flex items-stretch gap-2">
-                          <VoicePicker
-                            value={isPreset ? voice : CUSTOM_VOICE_ID}
-                            onChange={val => {
-                              // Clearing the preset flips isPreset false, revealing the
-                              // free-text input below.
-                              setVoice(val === CUSTOM_VOICE_ID ? '' : val);
-                            }}
-                            groups={buildCloudVoiceGroups(provider, discoveredVoices)}
-                            title="Default cloud voice"
-                            preview={{
-                              engine: 'cloud',
-                              cloudProvider: provider,
-                              cloudModel: form.tts.cloud.model,
-                              fishSettings: provider === 'fish-audio'
-                                ? {
-                                  temperature: form.tts.cloud.temperature,
-                                  topP: form.tts.cloud.topP,
-                                  latency: form.tts.cloud.latency,
-                                }
-                                : undefined,
-                              adminFetch,
-                            }}
-                          />
-                          <Btn onClick={voiceDiscovery.refresh} title="Refresh voice list">↻</Btn>
-                        </div>
-                        {!isPreset && (
-                          <Input
-                            // A blank compat voice is legitimate — the server picks
-                            // its own default — so don't flag it red.
-                            className={cn('mt-2', voice || isCompat ? 'border-ink' : 'border-[var(--danger)]')}
-                            value={form.tts.cloud.voice}
-                            maxLength={100}
-                            placeholder={isCompat ? 'Blank = server default' : 'Enter a custom voice id'}
-                            onChange={(e: ChangeEvent<HTMLInputElement>) => setVoice(e.target.value)}
-                          />
-                        )}
+                        <Input
+                          value={form.tts.cloud.voice}
+                          maxLength={100}
+                          placeholder="Server-specific (cloning ref or speaker id)"
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => setVoice(e.target.value)}
+                        />
                         <div className="field-hint">
-                          Used when a Cloud persona hasn’t set its own voice.{' '}
-                          {discoveredVoices.length > 0
-                            ? <>{discoveredVoices.length} voice{discoveredVoices.length === 1 ? '' : 's'} found
-                                on your {isCompat ? 'server' : 'account'}. Or choose <em>Custom voice id…</em> to
-                                enter one that isn’t listed.</>
-                            : <>Pick a default, or choose <em>Custom voice id…</em> for any other OpenAI voice
-                                name, ElevenLabs voice id, or Fish Audio reference id.</>}
+                          {voiceDiscovery.loading
+                            ? 'Checking the server for a voice list…'
+                            : <>Server-specific: Chatterbox cloning ref name, Qwen3
+                                speaker id, etc. Leave blank to let the server pick its
+                                own default.</>}
                         </div>
                       </div>
                     );
-                  })()}
-                </div>
-              </div>
-
-              <div className="grid">
-                <GroupHead>Voice tuning</GroupHead>
-                <TtsGainField engineId="cloud" form={form} setForm={setForm} />
-                <TtsSpeedField engineId="cloud" form={form} setForm={setForm} />
-                {form.tts.cloud.provider === 'elevenlabs' && (
-                  <ElevenLabsVoiceSettingsField form={form} setForm={setForm} />
-                )}
-                {isFish && <FishAudioSettingsField form={form} setForm={setForm} />}
-                {isCompat && <CompatParamsField form={form} setForm={setForm} />}
+                  }
+                  return (
+                    <div className="field">
+                      <Label>Default voice</Label>
+                      <div className="flex items-stretch gap-2">
+                        <VoicePicker
+                          value={isPreset ? voice : CUSTOM_VOICE_ID}
+                          onChange={val => {
+                            // Clearing the preset flips isPreset false, revealing the
+                            // free-text input below.
+                            setVoice(val === CUSTOM_VOICE_ID ? '' : val);
+                          }}
+                          groups={buildCloudVoiceGroups(provider, discoveredVoices)}
+                          title="Default cloud voice"
+                          preview={{
+                            engine: 'cloud',
+                            cloudProvider: provider,
+                            cloudModel: form.tts.cloud.model,
+                            fishSettings: provider === 'fish-audio'
+                              ? {
+                                temperature: form.tts.cloud.temperature,
+                                topP: form.tts.cloud.topP,
+                                latency: form.tts.cloud.latency,
+                              }
+                              : undefined,
+                            adminFetch,
+                          }}
+                        />
+                        <Btn onClick={voiceDiscovery.refresh} title="Refresh voice list">↻</Btn>
+                      </div>
+                      {!isPreset && (
+                        <Input
+                          // A blank compat voice is legitimate — the server picks
+                          // its own default — so don't flag it red.
+                          className={cn('mt-2', voice || isCompat ? 'border-ink' : 'border-[var(--danger)]')}
+                          value={form.tts.cloud.voice}
+                          maxLength={100}
+                          placeholder={isCompat ? 'Blank = server default' : 'Enter a custom voice id'}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => setVoice(e.target.value)}
+                        />
+                      )}
+                      <div className="field-hint">
+                        Used when a Cloud persona hasn’t set its own voice.{' '}
+                        {discoveredVoices.length > 0
+                          ? <>{discoveredVoices.length} voice{discoveredVoices.length === 1 ? '' : 's'} found
+                              on your {isCompat ? 'server' : 'account'}. Or choose <em>Custom voice id…</em> to
+                              enter one that isn’t listed.</>
+                          : <>Pick a default, or choose <em>Custom voice id…</em> for any other OpenAI voice
+                              name, ElevenLabs voice id, or Fish Audio reference id.</>}
+                      </div>
                     </div>
-                  </>
-                )}
+                  );
+                })()}
+              </div>
+            </div>
+
+            <div className="grid">
+              <GroupHead>Voice tuning</GroupHead>
+              <TtsGainField engineId="cloud" form={form} setForm={setForm} />
+              <TtsSpeedField engineId="cloud" form={form} setForm={setForm} />
+              {form.tts.cloud.provider === 'elevenlabs' && (
+                <ElevenLabsVoiceSettingsField form={form} setForm={setForm} />
+              )}
+              {isFish && <FishAudioSettingsField form={form} setForm={setForm} />}
+              {isCompat && <CompatParamsField form={form} setForm={setForm} />}
+            </div>
           </div>
           );
         })()}
@@ -1623,7 +1560,6 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
           </div>
           );
         })()}
-
 
           {(() => {
             const e = form.tts.defaultEngine;
@@ -1667,8 +1603,6 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
         </div>
       </Card>
 
-      {/* The operator's explicit rescue, ahead of the hardcoded
-          default-engine → Piper → Kokoro floor. */}
       <Advanced note="the rescue voice for a persona whose own engine fails">
       <Card
         title="Fallback voice"

@@ -4,10 +4,11 @@
 // Contracts:
 //   • `gemini` is a first-class engine id in the persona + skill vocabularies
 //     (restated lists stay equal — same posture as the tag regexes).
-//   • splitCues mirrors gemini_tts.py split_cues: vocal bursts become <...>,
-//     delivery modifiers join style, unknown brackets (track titles) survive.
+//   • splitCues: vocal bursts become <...> tags (inflected forms included, or
+//     Gemini 3.8 reads "laughs" aloud — its `text` is a verbatim transcript),
+//     delivery modifiers and free-text cues join speech_metadata.style, and
+//     capitalised track-title brackets survive.
 //   • fallbackTextFor strips brackets for gemini rescues (it speaks literally).
-//   • OpenAI instructions carry voiceStyle on gpt-4o-tts only.
 //   • Gemini is presented as a CLOUD PROVIDER, not a peer engine card, while
 //     keeping its own engine id end to end (see the fold block at the bottom).
 //
@@ -19,7 +20,6 @@ import assert from 'node:assert/strict';
 import { TTS_ENGINES } from '../src/schemas/persona.js';
 import { splitCues } from '../src/audio/gemini.js';
 import { fallbackTextFor } from '../src/audio/tts-fallback.js';
-import { deliveryHint } from '../src/llm/internal/speech/cloud-speech.js';
 
 test('gemini is a first-class engine id', () => {
   assert.ok((TTS_ENGINES as readonly string[]).includes('gemini'));
@@ -38,6 +38,23 @@ test('persona schema accepts a gemini slot', async () => {
   assert.equal(out.tts.voice, 'Despina');
 });
 
+test('speakMulti picks the request shape from the DISTINCT voice count', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../src/audio/gemini.ts', import.meta.url), 'utf8');
+  // Measured against the engine: the multi-speaker object form 400s on one voice
+  // ("speaker_voice_configs must equal 2"), and the array form 400s on two. Both
+  // branches are load-bearing; neither is a stylistic preference.
+  assert.match(src, /const oneVoice = seen\.size === 1;/,
+    'the shape must be chosen from the resolved voice count, not assumed');
+  assert.match(src, /\? \{ speech_config: \[\{ voice: speakers\[0\]\.voice \}\] \}/,
+    'one voice must use the single-speaker array form');
+  assert.match(src, /\{ speech_config: \{ mode: 'conversational', speakers \} \}/,
+    'two voices must use the conversational speakers form');
+  // `speaker` is required per-turn on the multi-speaker shape and forbidden on
+  // the single-speaker one, so it cannot just be left on unconditionally.
+  assert.match(src, /\.\.\.\(oneVoice \? \{\} : \{ speaker: speakerOf\(t\.alias\) \}\)/);
+});
+
 test('splitCues: bursts become angle tags, delivery joins style, titles survive', () => {
   assert.deepEqual(
     splitCues('Hello [sigh] mate, that was [sarcasm] brilliant [short pause] news'),
@@ -50,28 +67,141 @@ test('splitCues: bursts become angle tags, delivery joins style, titles survive'
   assert.deepEqual(splitCues('No cues'), { text: 'No cues', styles: [] });
 });
 
+test('splitCues: punctuation inside the bracket still resolves the cue', () => {
+  // The DJ writes punctuation inside the bracket naturally. Unstripped, `[sigh.]`
+  // missed the map and fell through to the free-text rule, becoming a SPOKEN
+  // "sigh." instead of an actual sigh — the exact failure the free-text rule was
+  // added to stop, reintroduced through the back door.
+  assert.deepEqual(
+    splitCues('Well [sigh.] anyway. [ Sigh ] Really. [chuckle!]'),
+    { text: 'Well <sigh> anyway. <sigh> Really. <chuckle>', styles: [] },
+  );
+});
+
+test('splitCues: the prompt’s own cue spellings never reach the transcript', () => {
+  // llm/internal/prompts/system.ts tells the DJ to write `[laughs]`,
+  // `[sighs]`, `[whispers]`, `[excited]` and `[soft and warm]`. Gemini 3.8
+  // treats `text` as a verbatim transcript, so an unrecognised bracket is
+  // RECITED — the cue becomes an audible artefact instead of a performance.
+  // Each spelling now emits ITSELF. The guide offers `<sigh> / <sighs>` as
+  // alternatives (and likewise `<chuckle> / <chuckles>`), so normalising the
+  // plural away threw away a documented tag. What this test is actually for is
+  // unchanged and is asserted first: the cue must never survive as a spoken
+  // word, which held under both spellings.
+  //
+  // The brackets are stripped BEFORE that check, not after: `<sighs>` is a
+  // correct tag, and a bare `\bsighs\b` matches inside it because `<` is a word
+  // boundary. Checking the raw text flags the fix as the bug.
+  const recited = splitCues('Honestly? [laughs] I told you so. [sighs] Anyway.');
+  assert.doesNotMatch(recited.text.replace(/<[^>]+>/g, ''), /\b(laughs|sighs)\b/,
+    'a cue that reaches the transcript is recited aloud by Gemini 3.8');
+  assert.deepEqual(
+    recited,
+    { text: 'Honestly? <laugh> I told you so. <sighs> Anyway.', styles: [] },
+  );
+  assert.deepEqual(
+    splitCues('A [excited] little number'),
+    { text: 'A little number', styles: ['excited, upbeat'] },
+  );
+  // Free-text performance cues are sustained delivery, so they ride the style
+  // field rather than the transcript.
+  assert.deepEqual(
+    splitCues('You may hear [soft and warm] in this one'),
+    { text: 'You may hear in this one', styles: ['soft and warm'] },
+  );
+});
+
+test('the station pronunciation note rides last and survives a full budget', async () => {
+  const { geminiStyle } = await import('../src/audio/gemini.js');
+  // The operator's regional note ("Sook rhymes with look") is station-wide and
+  // must reach the model on every render.
+  const withNote = geminiStyle({ soul: 'a sparky', voiceStyle: 'dry', pronunciation: 'Sook rhymes with look' });
+  assert.match(withNote, /Sook rhymes with look/);
+  // Order in the final string: persona delivery, then character, then the note
+  // as a closing correction.
+  assert.ok(
+    withNote.indexOf('dry') < withNote.indexOf('sparky')
+    && withNote.indexOf('sparky') < withNote.indexOf('Sook'),
+    `unexpected order: ${withNote}`);
+  // The soul yields before the note. A dropped note is a place name said wrong
+  // in EVERY segment; a shortened soul excerpt still reads as character.
+  const greedySoul = 'y'.repeat(600);
+  const tight = geminiStyle({ soul: greedySoul, voiceStyle: 'v', pronunciation: 'p'.repeat(200) });
+  assert.match(tight, /p{200}/, 'the note must survive even when the soul cannot fit');
+  assert.ok(tight.length <= 300 + 200 + 2,
+    `style grew past its budget: ${tight.length}`);
+  // Absent note → the composed style is byte-identical to before the field.
+  assert.equal(
+    geminiStyle({ soul: 'a sparky', voiceStyle: 'dry', pronunciation: '' }),
+    geminiStyle({ soul: 'a sparky', voiceStyle: 'dry' }),
+  );
+});
+
+test('a persona soul reaches Gemini, the way it reaches OpenAI', async () => {
+  // OpenAI composes `instructions` from soulBrief(soul) + voiceStyle
+  // (deliveryHint). Gemini had a first-class style field but received ONLY
+  // voiceStyle, so a persona's entire character — backstory, job, running jokes —
+  // never reached the model. That is why the retired sidecar hardcoded a style
+  // per persona to compensate.
+  const { geminiStyle } = await import('../src/audio/gemini.js');
+  const soul = 'An exhausted dad who has been up since 5am because of his kids. '
+    + 'He runs on instant coffee and complains about Lego in his feet.';
+  const style = geminiStyle({ soul, voiceStyle: 'tired Australian dad, warm, casual' });
+  assert.match(style, /tired Australian dad, warm, casual/,
+    'the operator\'s voiceStyle must survive');
+  assert.match(style, /exhausted dad/,
+    'the persona soul must now reach Gemini too');
+  // Ordering matters: the operator's deliberate directive gets the budget first.
+  // Gemini\'s prompting guide warns that long character blocks are the main
+  // cause of voice drift, so a long soul must never be able to crowd the
+  // voiceStyle out — which is the opposite of OpenAI\'s character-first order.
+  assert.ok(style.indexOf('tired Australian') < style.indexOf('exhausted dad'));
+  // OpenAI allows a 4096-char instructions string; Gemini is capped far lower
+  // for exactly the drift reason above.
+  assert.ok(style.length <= 300, `style must stay within VOICE_STYLE_MAX, got ${style.length}`);
+  // No soul, no style → nothing invented. The engine sends an empty style rather
+  // than a fabricated default.
+  assert.equal(geminiStyle({}), '');
+  // Cues still append after both.
+  assert.match(geminiStyle({ soul: 'a sparky', voiceStyle: 'dry' }, ['sarcastic']),
+    /dry.*sarcastic/s);
+});
+
+test('an unusable voice name degrades instead of 400-ing the segment', async () => {
+  const { usableVoice } = await import('../src/audio/gemini.js');
+  // Verified against the engine: 'Charon', 'charon' and 'CHARON' all work, so
+  // case is not a reason to reject — and the retired sidecar's title-case
+  // normalisation was therefore fixing nothing worth porting.
+  assert.equal(usableVoice('charon'), 'Charon');
+  assert.equal(usableVoice('  PUCK '), 'Puck');
+  // Voice Design / Replication ids are opaque per-project handles and must pass
+  // through — rejecting them would break custom voices.
+  assert.equal(usableVoice('voice_abc123'), 'voice_abc123');
+  assert.equal(usableVoice('voicekey_abc123'), 'voicekey_abc123');
+  // A stale alias 400s ("No matching speaker voice found for name"), which would
+  // throw every segment that persona voices into the fallback chain.
+  assert.equal(usableVoice('jax'), undefined);
+  assert.equal(usableVoice(''), undefined);
+  assert.equal(usableVoice(undefined), undefined);
+});
+
+test('splitCues: a capitalised bracket is a title, never a direction', () => {
+  // The shape that must survive. Losing a title to the style field would make
+  // the DJ announce “Blue Monday” in a voice described as its own name.
+  for (const text of [
+    'Live from [Track 2] tonight',
+    'Now playing [Blue Monday]',
+    'the set kicks off at [7pm] sharp',
+  ]) {
+    assert.deepEqual(splitCues(text), { text, styles: [] }, text);
+  }
+});
+
 test('fallbackTextFor strips brackets for gemini rescues', () => {
   assert.equal(fallbackTextFor('gemini', null, 'Well [sigh] hello'), 'Well hello');
   assert.equal(fallbackTextFor('piper', null, 'Well [sigh] hello'), 'Well [sigh] hello');
 });
 
-test('OpenAI instructions carry voiceStyle on gpt-4o-tts only', () => {
-  const hinted = deliveryHint(
-    { language: '', soul: '', voiceStyle: 'broad Australian accent' },
-    'openai', 'gpt-4o-mini-tts',
-  );
-  assert.match(hinted.instructions || '', /broad Australian accent/);
-  const legacy = deliveryHint(
-    { language: '', soul: '', voiceStyle: 'broad Australian accent' },
-    'openai', 'tts-1-hd',
-  );
-  assert.deepEqual(legacy, {});
-  const eleven = deliveryHint(
-    { language: 'Turkish', soul: '', voiceStyle: 'broad Australian accent' },
-    'elevenlabs', 'eleven_v3',
-  );
-  assert.ok(!('instructions' in eleven));
-});
 
 // --- the fold: Gemini as a Cloud provider, still its own engine id ----------
 //
@@ -131,25 +261,24 @@ test("gemini's badge reads the engine flag, not cloudByProvider", async () => {
     'cloudByProvider must not decide the gemini badge');
 });
 
-test('the Gemini card is gone from the ENGINE grid, not just from ENGINES', async () => {
+test('Gemini is offered as a provider card, not as its own engine card', async () => {
   const fs = await import('node:fs');
-  const panel = fs.readFileSync(
-    new URL('../../web/components/admin/settings/TtsSection.tsx', import.meta.url), 'utf8');
-
-  // The engine grid is fed by the CONTROLLER's tts.engines, not by engineMeta's
-  // ENGINES — which is why removing Gemini from ENGINES alone left the card on
-  // screen. The dispatcher must keep reporting it (a stored persona may name it),
-  // so the filter belongs here, at the point of use.
-  assert.match(panel, /const engines = \(data\.tts\?\.engines \|\| \['piper'\]\)\.filter\(/,
-    'the engine card list must filter gemini out at the point of use');
-  assert.match(panel, /e !== GEMINI_CLOUD_PROVIDER/,
-    'the filter must be on the gemini id specifically');
-
-  // And the Cloud card's own badge must not ask about cloud.provider while
-  // Gemini speaks: that value is stale, and it rendered "no key" directly above
-  // a Gemini card reading "key set".
-  assert.match(panel, /const providerCloudReady = geminiSelected\s*\n\s*\? available\.gemini/,
-    'the Cloud badge must read the engine flag while gemini is selected');
+  const meta = fs.readFileSync(
+    new URL('../../web/components/admin/tts/engineMeta.ts', import.meta.url), 'utf8');
+  const providers = fs.readFileSync(
+    new URL('../../web/components/admin/tts/cloudProviderMeta.ts', import.meta.url), 'utf8');
+  // Gemini is a managed Google service reached with the same key as the LLM
+  // section, so it belongs beside OpenAI / ElevenLabs / Fish in the PROVIDER
+  // grid. Two Google-backed choices in two different menus is a question nobody
+  // can answer from the screen.
+  assert.doesNotMatch(meta, /\{ id: 'gemini',\s+label:/,
+    'gemini must not have its own entry in the ENGINE grid');
+  assert.match(providers, /\{ id: 'gemini', label: 'Gemini'/,
+    'it must appear in the provider grid instead');
+  // And the badge reads the ENGINE flag, not a cloudByProvider entry the
+  // controller never sends for it.
+  assert.match(providers, /if \(id === 'gemini'\) \{/);
+  assert.match(providers, /if \(a\.gemini === undefined\)/);
 });
 
 test('the Gemini model and voice vocabularies are the verified lists', async () => {
@@ -205,38 +334,125 @@ test('a chosen Gemini model leads the chain instead of replacing it', async () =
     'an unpinned station keeps the chain unchanged');
 });
 
-test('the station Gemini choice is a floor under the persona, not a lock', async () => {
+test('the gemini branch threads the resolved voice, model and style', async () => {
   const fs = await import('node:fs');
   const tts = fs.readFileSync(new URL('../src/audio/tts.ts', import.meta.url), 'utf8');
-  // A persona that names a voice still wins; one that leaves it blank inherits
-  // the station default. Without the fallback the panel's "default voice" would
-  // do nothing for exactly the personas that leave it alone.
-  assert.match(tts, /personaTts\.engine === 'gemini' && personaTts\.voice\)\s*\n\s*\? personaTts\.voice\s*\n\s*: \(typeof stationGemini\.voice/,
-    'the persona voice must win, with the station voice as the fallback');
-  // And the preview's UNSAVED model must outrank the saved one, or "Play sample"
-  // auditions last week's model instead of the one in the dropdown.
-  assert.match(tts, /opts\.geminiModel[\s\S]{0,200}stationGemini\.model/,
-    'an unsaved preview model must outrank the saved station model');
+  // Precedence itself is asserted behaviourally in gemini-tts-settings.test.ts
+  // (stationGeminiPick); what matters HERE is that the single-speaker branch
+  // actually SPREADS the resolved pick into the call. A branch that resolved
+  // voice and model and then dropped one would keep every precedence test green.
+  assert.match(tts, /gemini\.speak\(text, \{ \.\.\.opts, voice, style, model \}\)/,
+    'the resolved voice, style and model must all reach gemini.speak');
 });
 
-test('the Voice panel offers both, and sends both', async () => {
+test('a persona on Gemini gets ONE voice field, shaped like the cloud one', async () => {
+  const fs = await import('node:fs');
+  const f = fs.readFileSync(
+    new URL('../../web/components/admin/tts/EngineVoiceFields.tsx', import.meta.url), 'utf8');
+  // The Gemini fold made Gemini a provider card, and the shared voice block
+  // already rendered for it — but a second standalone "Gemini voice" field
+  // rendered too. Two inputs, both writing `voice`: the second showed blank for
+  // any value the picker considered a preset, and whichever was typed into last
+  // silently won.
+  assert.doesNotMatch(f, /<Label>Gemini voice<\/Label>/,
+    'there must be no separate Gemini voice field beside the shared one');
+  assert.doesNotMatch(f, /Custom Gemini voice id[\s\S]{0,200}className="mt-2"/,
+    'the custom box must be the shared gated one, not an always-on extra input');
+  // ONE field whose contents follow the selected provider card.
+  assert.match(f, /const voiceGroups = geminiSelected\s*\n\s*\? buildGeminiVoiceGroups\(\)/,
+    'the picker contents must follow the selected provider');
+  assert.match(f, /const isPreset = geminiSelected\s*\n\s*\? isKnownGeminiVoice\(voice\)/,
+    'preset-vs-custom must be decided the same way for both');
+  // The free-text box stays hidden until "Custom voice id…" is chosen — the
+  // cloud providers' behaviour, which is what the operator asked Gemini to match.
+  assert.match(f, /!isPreset && \(\s*\n\s*<Input/, 'the custom box must be gated on !isPreset');
+  // And the sample button still has to audition with the Gemini engine, not cloud.
+  assert.match(f, /preview=\{geminiSelected\s*\n\s*\?\s*\{ engine: 'gemini'/,
+    'the sample button must audition with the Gemini engine, not cloud');
+  assert.match(f, /:\s*\{ engine: 'cloud', cloudProvider/,
+    'the cloud branch of the same preview must be left intact');
+});
+
+test('a Gemini persona is never labelled piper', async () => {
+  const fs = await import('node:fs');
+  const helpers = fs.readFileSync(
+    new URL('../../web/components/admin/personas/helpers.ts', import.meta.url), 'utf8');
+  // engineLabel had no gemini branch, so a persona on Gemini fell through to the
+  // piper fallback and the personas hero reported "piper / Despina" — naming a
+  // local engine that never rendered it, and sending the operator to look for a
+  // piper voice they never set. The same class of wrong-engine mislabelling the
+  // duplicate voice fields caused.
+  assert.match(helpers, /engine === 'gemini'\) return `gemini \//,
+    'a Gemini persona must report its own engine');
+  // And it must come BEFORE the piper fallback, or the branch is unreachable.
+  const geminiAt = helpers.indexOf("engine === 'gemini'");
+  const piperFallback = helpers.indexOf("return `piper /");
+  assert.ok(geminiAt > -1 && geminiAt < piperFallback,
+    'the gemini branch has to precede the piper fallback to be reachable');
+  // A blank Gemini voice is the STATION floor, not piper's "built-in".
+  const geminiLine = /engine === 'gemini'\) return ([^\n]+)/.exec(helpers)?.[1] || '';
+  assert.match(geminiLine, /station default/,
+    'a blank Gemini voice must name the station floor, not a built-in default');
+  assert.doesNotMatch(geminiLine, /built-in/,
+    'the piper "built-in" claim must not leak into the Gemini label');
+});
+
+test('the Gemini voice list lives beside the cloud ones, once', async () => {
+  const fs = await import('node:fs');
+  const groups = fs.readFileSync(
+    new URL('../../web/lib/cloudVoiceGroups.ts', import.meta.url), 'utf8');
+  const editor = fs.readFileSync(
+    new URL('../../web/components/admin/tts/EngineVoiceFields.tsx', import.meta.url), 'utf8');
+  // It used to be declared in the persona editor next to its JSX — the exact
+  // place a second copy lands the moment another screen wants the same labels.
+  assert.doesNotMatch(editor, /GEMINI_PREBUILT_VOICES/,
+    'the curated list must not be duplicated in the editor');
+  assert.match(groups, /export function buildGeminiVoiceGroups/);
+  // Every provider branch must end with the custom row, or a designed /
+  // replicated `voice_…` id has no home in the picker.
+  assert.match(groups, /buildGeminiVoiceGroups[\s\S]*?\{ voices: \[CUSTOM_ROW\] \}/,
+    'the Gemini picker must offer Custom voice id… like every cloud provider');
+  // Case-insensitive: the engine accepts any case, so a lowercase stored value
+  // is that voice rather than a custom one.
+  assert.match(groups, /isKnownGeminiVoice[\s\S]*?toLowerCase\(\)/);
+  // Choosing the Gemini card must land on a voice, not on an empty custom box.
+  assert.match(editor, /onChange\(\{ engine: GEMINI_CLOUD_PROVIDER, voice: defaultGeminiVoice\(\) \}\)/,
+    'the Gemini card must seed a prebuilt voice, like the cloud cards do');
+});
+
+test('the station Voice panel offers model, voice and pronunciation', async () => {
   const fs = await import('node:fs');
   const panel = fs.readFileSync(
     new URL('../../web/components/admin/settings/TtsSection.tsx', import.meta.url), 'utf8');
-  // Sourced from the generated mirror, so the dropdown and the server's
-  // validation cannot drift into offering something the save path rejects.
-  assert.match(panel, /import \{ GEMINI_TTS_MODELS, GEMINI_TTS_VOICES \} from '\.\.\/\.\.\/\.\.\/lib\/schemas\.generated'/);
-  assert.match(panel, /<Label>Model<\/Label>/, 'a model picker must exist');
-  assert.match(panel, /<Label>Default voice<\/Label>/, 'a default-voice picker must exist');
+  // Model list sourced from the generated mirror, so the dropdown and the
+  // server's validation cannot drift into offering something save rejects.
+  // Aliased as CLOUD_PROVIDER_IDS alongside it — the same import statement, so
+  // the regex allows a named-alias form rather than pinning one spelling.
+  assert.match(panel, /import \{[^}]*GEMINI_TTS_MODELS[^}]*\} from '\.\.\/\.\.\/\.\.\/lib\/schemas\.generated'/);
   assert.match(panel, /GEMINI_TTS_MODELS\.map\(/);
-  assert.match(panel, /GEMINI_TTS_VOICES\.map\(/);
   // '' is the "walk the fallback chain" choice and must survive the round trip.
   assert.match(panel, /<SelectItem value="">Automatic \(fallback chain\)<\/SelectItem>/);
-  assert.match(panel, /model: form\.tts\.gemini\?\.model \?\? ''/, 'the payload must send the model');
-  assert.match(panel, /voice: form\.tts\.gemini\?\.voice \?\? 'Puck'/, 'the payload must send the voice');
-  // Dirty-tracking: without these the form saves nothing and says nothing.
-  assert.match(panel, /form\.tts\.gemini\?\.model \|\| ''\)\.trim\(\) !== savedGeminiModel/);
-  assert.match(panel, /form\.tts\.gemini\?\.voice \|\| ''\) !== savedGeminiVoice/);
+  // The save payload moved out of the component and into its own module, because
+  // `save()` REBUILDS the gemini block field by field — a field it does not name is
+  // not unsaved, it is silently discarded while still rendering perfectly. These
+  // three assertions therefore read the module that now owns those defaults; the
+  // panel no longer contains them and asserting it did would only re-introduce the
+  // coupling that let the field be forgotten in the first place.
+  //
+  // The behavioural owner of these invariants is web/tests/gemini-save-payload.test.ts,
+  // which calls the builder and checks the wire shape, and controller/scripts/
+  // gemini-save-contract.test.ts, which fails if the schema gains a gemini field
+  // neither side names. These regexes are the secondary guard only.
+  const payload = fs.readFileSync(
+    new URL('../../web/components/admin/settings/geminiSavePayload.ts', import.meta.url), 'utf8');
+  assert.match(payload, /model: input\?\.model \?\? ''/, 'the payload must send the model');
+  assert.match(payload, /voice: input\?\.voice \?\? 'Puck'/, 'the payload must send the voice');
+  assert.match(payload, /pronunciation: input\?\.pronunciation \?\? ''/,
+    'a blank pronunciation note is a real choice and must survive the round trip');
+  // The station pronunciation note is one free-text field, capped at the
+  // engine's own bound.
+  assert.match(panel, /<Label>Pronunciation notes<\/Label>/);
+  assert.match(panel, /maxLength=\{GEMINI_PRONUNCIATION_MAX\}/);
 });
 
 
@@ -244,62 +460,28 @@ test('the cloud-only panel content is gated on the selection, not removed', asyn
   const fs = await import('node:fs');
   const panel = fs.readFileSync(
     new URL('../../web/components/admin/settings/TtsSection.tsx', import.meta.url), 'utf8');
-
-  // Every provider after Gemini — the connection block, the model, the provider
-  // voice, the provider knobs — must still be there. Gemini is ONE provider, not
-  // a replacement for the others, so this asserts OpenAI and the rest are
-  // untouched rather than merely absent from the file.
-  for (const marker of [
-    'cloudProviderLabel(form.tts.cloud.provider)',
-    '<Label>Default voice</Label>',
-    'engineId="cloud"',
-  ]) {
-    assert.ok(panel.includes(marker), `${marker} must survive — Gemini is one provider, not a replacement`);
-  }
-  const providers = fs.readFileSync(
-    new URL('../../web/components/admin/tts/cloudProviderMeta.ts', import.meta.url), 'utf8');
-  for (const id of ['openai', 'elevenlabs', 'fish-audio', 'openai-compatible', 'gemini']) {
-    assert.ok(providers.includes(`id: '${id}'`), `${id} must remain a Cloud provider`);
-  }
-
-  // They are gated on the SELECTION rather than deleted, because under a Gemini
-  // selection the panel was showing an OpenAI connection form the operator never
-  // chose — directly beneath a Gemini card reading "key set".
-  assert.match(panel, /\{!geminiSelected && \([\s\S]{0,1500}cloudProviderLabel\(/,
-    'the cloud-only block must be gated on !geminiSelected');
+  // Gemini reaches Google directly with its own key field, so the OpenAI
+  // connection form, model and tuning knobs must not render under a Gemini
+  // selection — the operator never chose them. Gated, not deleted: the same
+  // block still serves every other provider.
+  assert.match(panel, /\{isCloudEngine && !geminiSelected && \(\(\) => \{/,
+    'the cloud block must be gated on !geminiSelected');
 });
 
 test('both panels derive the Gemini selection from the one stored engine id', async () => {
   const fs = await import('node:fs');
-  const read = (rel: string) => fs.readFileSync(new URL(rel, import.meta.url), 'utf8');
-
-  // The settings panel and the persona slot each render a provider grid; both
-  // must read defaultEngine/engine and highlight from it, never from a second
-  // field that could disagree.
-  const panel = read('../../web/components/admin/settings/TtsSection.tsx');
-  const persona = read('../../web/components/admin/tts/EngineVoiceFields.tsx');
-
-  for (const [name, src] of [['TtsSection', panel], ['EngineVoiceFields', persona]] as const) {
-    assert.match(src, /value=\{engineCategory\(/,
-      `${name}: the engine grid must highlight through engineCategory`);
-    assert.match(src, /geminiSelected \? GEMINI_CLOUD_PROVIDER : /,
-      `${name}: the provider grid must highlight gemini from the stored engine`);
-    assert.match(src, /\.\.\.new Set\(\[/,
-      `${name}: the provider list must be de-duplicated before gemini is appended`);
-    assert.match(src, /new Set\(\[[\s\S]{0,400}?GEMINI_CLOUD_PROVIDER/,
-      `${name}: gemini must be appended to the provider list`);
-    // Gemini must not run through selectCloudProvider, which rewrites
-    // cloud.voice / cloud.model and would hand it a Fish Audio voice id.
-    assert.doesNotMatch(src, /selectCloudProvider\(f, v\)/,
-      `${name}: the provider grid must not route gemini through selectCloudProvider`);
-  }
-
-  // The Gemini fields (key, voice, speed, level) live inside the Cloud panel,
-  // so picking Gemini shows them in the same place as the other providers'.
-  assert.match(panel, /form\.tts\.defaultEngine === 'cloud' \|\| geminiSelected/,
-    'the Cloud panel must open for gemini');
-  assert.match(panel, /\{geminiSelected && \(/,
-    'the Gemini options must render inside that panel');
+  const panel = fs.readFileSync(
+    new URL('../../web/components/admin/settings/TtsSection.tsx', import.meta.url), 'utf8');
+  const meta = fs.readFileSync(
+    new URL('../../web/components/admin/tts/engineMeta.ts', import.meta.url), 'utf8');
+  // One stored field decides both panels. If the engine grid highlighted by the
+  // raw id while the provider grid selected by the same id, they could disagree.
+  assert.match(panel, /const geminiSelected = form\.tts\.defaultEngine === GEMINI_CLOUD_PROVIDER;/);
+  assert.match(panel, /engineCategory\(form\.tts\.defaultEngine\)/,
+    'the engine grid must highlight through engineCategory');
+  // The two helpers are always written together and never read apart.
+  assert.match(meta, /export function engineCategory\(engine: string\): string \{\s*return engine === GEMINI_CLOUD_PROVIDER \? 'cloud' : engine;/);
+  assert.match(meta, /export function engineForCloudProvider\(provider: string\): string \{\s*return provider === GEMINI_CLOUD_PROVIDER \? GEMINI_CLOUD_PROVIDER : 'cloud';/);
 });
 
 test('gemini still reads the standard key, never the pool', async () => {

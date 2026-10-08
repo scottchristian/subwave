@@ -1,10 +1,6 @@
 'use client';
 
-// Skill Edit Card -- the segment-sheet editor, shown as a modal over
-// /admin/skills. Creates a custom skill (POST /dj/skills) or edits a custom or
-// built-in one (PUT /dj/skills/:id/file). The controller is the validation gate.
-// The on/off toggle and Run now are LIVE operator actions and take no part in
-// the Save/dirty flow, which only writes the SKILL.md file fields.
+// Enable and Run now act immediately; Save writes the skill file.
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
@@ -36,7 +32,6 @@ import { skillSubmitUrl } from '../../../lib/repo';
 import { useZodForm, applyServerFieldErrors, fieldAria } from '@/lib/form';
 import { TextField, TextareaField } from '@/lib/form-fields';
 import { Switch } from '@/components/ui/switch';
-import { EngineVoiceFields, type EngineVoiceData } from '../tts/EngineVoiceFields';
 import {
   skillKeys,
   useSkillFileQuery,
@@ -83,7 +78,6 @@ interface SkillFormValues {
   brief: string;
   window: 'any' | 'commute';
   requiresKey: string;
-  voice: { engine: string; voice: string; cloudProvider: string } | null;
 }
 
 // The skill's current knob values as form strings.
@@ -110,7 +104,6 @@ function configKey(config: Record<string, string>): string {
 // GET /dj/skills/:kind/file -> the RHF defaultValues shape. Shared by the load
 // effect and Reset to default.
 function fileToFormValues(j: SkillFileResponse) {
-  const v = j.voice;
   return {
     label: j.label || '',
     cooldown: j.cooldown || '',
@@ -122,9 +115,6 @@ function fileToFormValues(j: SkillFileResponse) {
     tags: Array.isArray(j.tags) ? j.tags : [],
     brief: j.brief || '',
     requiresKey: j.requiresKey || '',
-    voice: v && typeof v === 'object' && typeof v.engine === 'string' && v.engine
-      ? { engine: v.engine, voice: typeof v.voice === 'string' ? v.voice : '', cloudProvider: typeof v.cloudProvider === 'string' && v.cloudProvider ? v.cloudProvider : 'openai' }
-      : null,
   };
 }
 
@@ -168,18 +158,6 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   const [busy, setBusy] = useState(false);          // saving / creating
   const [acting, setActing] = useState(false);      // toggle / run in flight
   const [flash, setFlash] = useState<string | null>(null);
-  // Voice lists for the skill-voice picker (EngineVoiceFields): the same
-  // station TTS snapshot the persona editor reads. Fetched once per mount;
-  // a failure leaves the engine picker usable with empty lists.
-  const [voiceData, setVoiceData] = useState<EngineVoiceData | null>(null);
-  useEffect(() => {
-    let live = true;
-    // admin-query-imperative: skill-voice-data
-    adminJson(adminFetch, '/settings')
-      .then(j => { if (live) setVoiceData(j as EngineVoiceData); })
-      .catch(() => { /* lists stay empty */ });
-    return () => { live = false; };
-  }, [adminFetch]);
   const [confirmDelete, setConfirmDelete] = useState(false);  // delete confirm dialog
   const [defaults, setDefaults] = useState<SkillDefaults | null>(null); // built-in shipped defaults
 
@@ -196,8 +174,8 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   const form = useZodForm(
     schema,
     (mode === 'create'
-      ? { name: '', label: '', cooldown: '', cron: '', cronOnly: false, cohosts: false, context: [], tags: [], brief: '', window: 'any', requiresKey: '', voice: null }
-      : { label: '', cooldown: '', cron: '', cronOnly: false, cohosts: false, context: [], tags: [], brief: '', window: 'any', requiresKey: '', voice: null }
+      ? { name: '', label: '', cooldown: '', cron: '', cronOnly: false, cohosts: false, context: [], tags: [], brief: '', window: 'any', requiresKey: '' }
+      : { label: '', cooldown: '', cron: '', cronOnly: false, cohosts: false, context: [], tags: [], brief: '', window: 'any', requiresKey: '' }
     ) as DefaultValues<z.input<typeof schema>>,
   );
   const control = form.control as unknown as Control<SkillFormValues>;
@@ -277,7 +255,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   // Every field has its own inline error slot. `requiresKey` is the exception:
   // a hidden passthrough with no rendered control, so a bad disk-authored value
   // has nowhere else to surface.
-  const FIELDS_WITH_INLINE_ERRORS = ['name', 'label', 'cooldown', 'cron', 'cronOnly', 'cohosts', 'context', 'tags', 'window', 'brief', 'voice'];
+  const FIELDS_WITH_INLINE_ERRORS = ['name', 'label', 'cooldown', 'cron', 'cronOnly', 'cohosts', 'context', 'tags', 'window', 'brief'];
   const blockingIssue = (() => {
     const entry = Object.entries(form.formState.errors).find(
       ([key, err]) => err && !FIELDS_WITH_INLINE_ERRORS.includes(key),
@@ -738,7 +716,6 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
               </div>
             </div>
 
-            {/* Cron timer — optional dedicated schedule that fires the skill immediately */}
             <div className="sw-section">
               <div style={sectionLabel}>CRON TIMER — FIRE ON A FIXED SCHEDULE</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginTop: 16 }}>
@@ -815,73 +792,6 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
               />
             </div>
 
-            {/* Voice — optional dedicated TTS voice for this skill. Off means
-                the on-air DJ's voice. Ignored by co-hosted discussions, where
-                each line speaks in its roster persona's own voice. */}
-            <div className="sw-section">
-              <Controller
-                control={control}
-                name="voice"
-                render={({ field, fieldState }) => {
-                  const baseId = `${uid}-voice`;
-                  const aria = fieldAria(baseId, fieldState.error);
-                  const slot = field.value as { engine: string; voice: string; cloudProvider: string } | null;
-                  return (
-                    <>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                        <Switch
-                          {...aria.controlProps}
-                          checked={!!slot}
-                          onCheckedChange={on => field.onChange(on
-                            ? { engine: 'piper', voice: '', cloudProvider: 'openai' }
-                            : null)}
-                          onBlur={field.onBlur}
-                          ref={field.ref}
-                        />
-                        <label {...aria.labelProps} style={{ ...sectionLabel, cursor: 'pointer' }}>
-                          VOICE · SET A CUSTOM VOICE FOR THIS SKILL
-                        </label>
-                      </div>
-                      <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12, lineHeight: 1.6, maxWidth: '72ch' }}>
-                        Off by default: the segment airs in the on-air DJ&apos;s voice.
-                        Turn this on to pin the skill to its own engine and voice — the
-                        same picker personas use. Use the sample button to
-                        audition the voice before saving.
-                        {cohostsValue && (
-                          <> This skill is co-hosted, so the override is ignored: every
-                          contribution speaks in its roster persona&apos;s own voice.</>
-                        )}
-                      </div>
-                      {!!slot && (
-                        <div style={{ marginTop: 16 }}>
-                          <EngineVoiceFields
-                            value={slot}
-                            onChange={patch => field.onChange({ ...slot, ...patch })}
-                            data={voiceData}
-                            adminFetch={adminFetch}
-                            unavailableNote={() => (
-                              <>This engine isn&apos;t available right now, so the skill falls back to the station voice until it&apos;s up.</>
-                            )}
-                            previewHint={<>
-                              Plays a short sample in this skill&apos;s voice. Pick from
-                              the list where one exists; where it doesn&apos;t (remote,
-                              or a server with no advertised voices) type the id in.
-                            </>}
-                          />
-                        </div>
-                      )}
-                      {fieldState.error && (
-                        <div {...aria.errorProps} role="alert" style={{ fontSize: 12, color: 'var(--accent)', marginTop: 12 }}>
-                          {fieldState.error.message}
-                        </div>
-                      )}
-                    </>
-                  );
-                }}
-              />
-            </div>
-
-            {/* Window — custom skills only (built-in window isn't editable) */}
             {custom && (
               <div className="sw-section">
                 <Controller

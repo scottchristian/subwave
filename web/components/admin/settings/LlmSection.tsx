@@ -4,6 +4,7 @@ import type { ChangeEvent } from 'react';
 import { useEffect, useState } from 'react';
 import { notify, errorMessage } from '../../../lib/notify';
 import { adminResponse } from '../../../lib/admin-query';
+import { fieldAria } from '../../../lib/form';
 import { useModelDiscovery } from '@/hooks/useModelDiscovery';
 import { V3AlertDialog } from '../../ui/alert-dialog';
 import { Input } from '../../ui/input';
@@ -15,7 +16,6 @@ import { Card, Btn, Pill, Seg } from '../ui';
 import { ProviderSelector } from '../llm/ProviderSelector';
 import { ModelCombobox } from '../llm/ModelCombobox';
 import { LLM_ENV_VARS, llmProviderLabel } from '../llm/providerMeta';
-import { GoogleKeyPoolEditor, type GooglePoolState } from './GoogleKeyPoolEditor';
 import { Advanced } from './section-chrome';
 import {
   SectionHeader, SaveBar, KeyStatus, KeyTestResult, KEY_HINTS,
@@ -31,6 +31,7 @@ import {
   LLM_HEADER_VALUE_RE,
   LLM_HEADER_VALUE_MAX,
   LLM_HEADERS_MAX,
+  type GeminiSafety,
 } from '@/lib/schemas.generated';
 
 // Provider descriptors, the cloud-key env-var map and the badge logic live in
@@ -43,6 +44,44 @@ import {
 const INLINE_KEY_PROVIDERS = ['openai-compatible', 'locca'];
 const LOCCA_DEFAULT_BASE_URL = 'http://host.docker.internal:8080/v1';
 
+const GEMINI_SAFETY_LABELS: { id: keyof GeminiSafety; label: string }[] = [
+  { id: 'harassment', label: 'Harassment' },
+  { id: 'hateSpeech', label: 'Hate speech' },
+  { id: 'sexuallyExplicit', label: 'Sexually explicit' },
+  { id: 'dangerousContent', label: 'Dangerous content' },
+];
+
+function GeminiSafetyEditor({ value, onChange, idPrefix }: {
+  value: GeminiSafety;
+  onChange: (category: keyof GeminiSafety, checked: boolean) => void;
+  idPrefix: string;
+}) {
+  const aria = fieldAria(idPrefix, undefined, { hasDescription: true });
+  return (
+    <div className="field">
+      <div {...aria.labelledByProps} className="text-[13px] font-bold">Block categories</div>
+      <div role="group" {...aria.groupProps} className="mt-2 flex flex-col gap-2">
+        {GEMINI_SAFETY_LABELS.map(({ id, label }) => (
+          <label key={id} className="flex cursor-pointer items-center gap-2 text-[13px] leading-[1.5] text-ink">
+            <input
+              type="checkbox"
+              checked={value[id]}
+              onChange={e => onChange(id, e.target.checked)}
+              className="accent-[var(--accent)]"
+            />
+            <span>{label}</span>
+          </label>
+        ))}
+      </div>
+      <div {...aria.descriptionProps} className="field-hint mt-2">
+        Checked categories block content with medium or high probability of harm.
+        Unchecked categories allow it. Primary and fallback settings are independent
+        and apply only when that model uses Google.
+      </div>
+    </div>
+  );
+}
+
 // Custom request headers for an openai-compatible gateway (#1618). A row list
 // rather than a map: the operator types a name one character at a time, and a
 // map keyed by that name loses the row on every blank or duplicate key.
@@ -50,7 +89,7 @@ const LOCCA_DEFAULT_BASE_URL = 'http://host.docker.internal:8080/v1';
 // Values already on file arrive redacted as the literal 'set' (getRedacted),
 // and posting that back keeps the stored value — so an untouched row shows as
 // "on file" and is left alone rather than being re-typed to survive a save.
-function HeaderRowsEditor({
+export function HeaderRowsEditor({
   rows, onChange, disabled, idPrefix,
 }: {
   rows: LlmHeaderRow[];
@@ -121,6 +160,7 @@ interface LlmSectionProps extends SectionProps {
   refresh: () => void;
 }
 export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh, fieldErrors }: LlmSectionProps) {
+  const [resetCompatKey, setResetCompatKey] = useState(false);
   const [primaryKeyInput, setPrimaryKeyInput] = useState('');
   const [fallbackKeyInput, setFallbackKeyInput] = useState('');
   const [primaryKeyTest, setPrimaryKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
@@ -214,21 +254,8 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
     adminFetch,
   });
 
-  // A configured pool is the ONLY source of Google credentials — the controller
-  // reads the singular variable solely as a one-key fallback. Leaving that field
-  // editable would let an operator save a replacement key that is accepted,
-  // reported as saved, and then never read by anything.
-  const googlePoolCount =
-    (data.env?.GOOGLE_KEY_POOL as GooglePoolState | undefined)?.count ?? 0;
-
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
-    // Google saves to the LEGACY singular variable, and the pool is a separate
-    // thing that takes precedence while it exists. That is what makes "one key"
-    // and "a pool" two states rather than one: if this field wrote the pool,
-    // removing every key and then typing one here would re-activate the pool and
-    // disable the very field being typed into, so a single key could never be
-    // configured at all.
     try {
       const r = await adminResponse(adminFetch, '/settings/secrets', {
         method: 'POST',
@@ -323,16 +350,12 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
       llm: {
         provider: activeProvider,
         model: form.llm.model,
-        modelOverrides: Object.fromEntries(
-          Object.entries(form.llm.modelOverrides || {})
-            .map(([k, v]) => [k, (v || '').trim()] as const)
-            .filter(([, v]) => v),
-        ),
         ollamaUrl: form.llm.ollamaUrl,
         numCtx: form.llm.numCtx,
         repeatPenalty: form.llm.repeatPenalty,
         providerBaseUrls: form.llm.providerBaseUrls,
         headers: headerMap(form.llm.headers),
+        compatibleMode: form.llm.compatibleMode,
         reasoning: form.llm.reasoning,
         toolChoice: form.llm.toolChoice,
         pickerAgent: form.llm.pickerAgent,
@@ -347,7 +370,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         maxOutputTokens: form.llm.maxOutputTokens,
         discoverySteps: form.llm.discoverySteps,
         geminiSafety: { ...form.llm.geminiSafety },
-        ...(INLINE_KEY_PROVIDERS.includes(activeProvider) && compatKeyInput.trim()
+        ...(INLINE_KEY_PROVIDERS.includes(activeProvider) && (compatKeyInput.trim() || resetCompatKey)
           ? { apiKey: compatKeyInput.trim() }
           : {}),
         fallback: {
@@ -358,8 +381,10 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           numCtx: form.llm.fallback.numCtx,
           repeatPenalty: form.llm.fallback.repeatPenalty,
           discoverySteps: form.llm.fallback.discoverySteps,
+          geminiSafety: { ...form.llm.fallback.geminiSafety },
           providerBaseUrls: form.llm.fallback.providerBaseUrls,
           headers: headerMap(form.llm.fallback.headers),
+          compatibleMode: form.llm.fallback.compatibleMode,
           reasoning: form.llm.fallback.reasoning,
           ...(INLINE_KEY_PROVIDERS.includes(activeFallbackProvider) && compatFallbackKeyInput.trim()
             ? { apiKey: compatFallbackKeyInput.trim() }
@@ -388,6 +413,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
     if (INLINE_KEY_PROVIDERS.includes(activeProvider) && compatKeyInput.trim()) {
       setCompatKeyInput('');
     }
+    setResetCompatKey(false);
     if (INLINE_KEY_PROVIDERS.includes(activeFallbackProvider) && compatFallbackKeyInput.trim()) {
       setCompatFallbackKeyInput('');
     }
@@ -492,6 +518,17 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           {form.llm.provider === 'openai-compatible' && (
             <div className="field">
               <Label>Server base URL</Label>
+              <div className="flex flex-wrap gap-2">
+                <Btn onClick={() => { setCompatKeyInput(''); setResetCompatKey(true); setForm(f => ({ ...f, llm: { ...f.llm, compatibleMode: 'hosted', headers: [], providerBaseUrls: { ...f.llm.providerBaseUrls, 'openai-compatible': 'https://api.atlascloud.ai/v1' } } })); }}>
+                  Use Atlas Cloud
+                </Btn>
+                <Btn onClick={() => { setCompatKeyInput(''); setResetCompatKey(true); setForm(f => ({ ...f, llm: { ...f.llm, compatibleMode: 'hosted', headers: [], providerBaseUrls: { ...f.llm.providerBaseUrls, 'openai-compatible': '' } } })); }}>
+                  Use Azure OpenAI v1
+                </Btn>
+                <Btn onClick={() => { setCompatKeyInput(''); setResetCompatKey(true); setForm(f => ({ ...f, llm: { ...f.llm, compatibleMode: 'hosted', headers: [], providerBaseUrls: { ...f.llm.providerBaseUrls, 'openai-compatible': 'https://api.mistral.ai/v1' } } })); }}>
+                  Use Mistral
+                </Btn>
+              </div>
               <Input
                 value={form.llm.providerBaseUrls['openai-compatible'] ?? ''}
                 onChange={(e: ChangeEvent<HTMLInputElement>) =>
@@ -501,10 +538,30 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 className="max-w-[360px]"
               />
               <div className="field-hint">
-                Any OpenAI-compatible server (llama.cpp, vLLM, LM Studio…),
-                including the <code>/v1</code> suffix. Must be reachable from the
-                controller container. Use the host’s LAN or Tailscale IP, not
-                <code>127.0.0.1</code>.
+                Include the <code>/v1</code> suffix. For Azure, enter
+                <code> https://YOUR-RESOURCE.openai.azure.com/openai/v1</code>,
+                then add an <code>api-key</code> custom header below and enter the
+                deployment name as the model. The Atlas preset fills its URL;
+                enter your key in the Bearer token field. The Mistral preset
+                fills <code>https://api.mistral.ai/v1</code>; enter your Mistral
+                API key in the Bearer token field. The URL must be
+                reachable from the controller container. A preset clears the
+                previous custom headers and saved compatible-provider Bearer
+                token on Save; primary and backup share that token.
+              </div>
+            </div>
+          )}
+
+          {form.llm.provider === 'openai-compatible' && (
+            <div className="field">
+              <Label>API behavior</Label>
+              <Seg value={form.llm.compatibleMode}
+                options={[{ id: 'local', label: 'Local model' }, { id: 'hosted', label: 'Hosted service' }]}
+                onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, compatibleMode: v as 'local' | 'hosted' } }))} />
+              <div className="field-hint">
+                Hosted uses native structured output and leaves sampling and reasoning
+                controls to the service. Local keeps the llama.cpp/vLLM request
+                adjustments. Existing stations stay on Local.
               </div>
             </div>
           )}
@@ -598,7 +655,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             </div>
           )}
 
-          {(form.llm.provider === 'openai-compatible' || form.llm.provider === 'locca') && (
+          {(form.llm.provider === 'locca' || (form.llm.provider === 'openai-compatible' && form.llm.compatibleMode === 'local')) && (
             <div className="field">
               <Label>Repetition penalty (repeat_penalty)</Label>
               <Input
@@ -628,64 +685,35 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
 
           {LLM_ENV_VARS[form.llm.provider] && (() => {
             const keyVar = LLM_ENV_VARS[form.llm.provider]!;
-            const isGoogle = keyVar === 'GOOGLE_GENERATIVE_AI_API_KEY';
-            // A configured pool IS the Google credential, so the single-key
-            // field is shown but inert while one exists. Visible-and-disabled
-            // rather than hidden: an operator who cannot see the field cannot
-            // tell whether their key was replaced or is merely parked, and the
-            // obvious question ("where did my single key go?") deserves an
-            // answer on screen instead of in a doc.
-            const poolActive = isGoogle && googlePoolCount > 0;
             return (
               <>
                 <div className="field">
-                  <Label>{`${llmProviderLabel(form.llm.provider)} API key`}</Label>
-
+                  <Label>{llmProviderLabel(form.llm.provider)} API key</Label>
                   <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
                     <Input
                       type="password"
                       autoComplete="off"
                       value={primaryKeyInput}
-                      disabled={poolActive}
-                      placeholder={poolActive || data.env?.[keyVar] ? '\u2022\u2022\u2022\u2022\u2022\u2022 (on file)' : (KEY_HINTS[keyVar] ?? '')}
+                      placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
                       onChange={(e: ChangeEvent<HTMLInputElement>) => setPrimaryKeyInput(e.target.value)}
-                      className="max-w-[360px] disabled:cursor-not-allowed disabled:opacity-50"
+                      className="max-w-[360px]"
                     />
                     <Btn
                       onClick={() => testKey(keyVar, primaryKeyInput, setPrimaryKeyTesting, setPrimaryKeyTest, () => setPrimaryKeyInput(''))}
-                      disabled={poolActive || primaryKeyTesting || (!primaryKeyInput.trim() && !data.env?.[keyVar])}
+                      disabled={primaryKeyTesting || (!primaryKeyInput.trim() && !data.env?.[keyVar])}
                     >
-                      {primaryKeyTesting ? 'Testing\u2026' : 'Test key'}
+                      {primaryKeyTesting ? 'Testing…' : 'Test key'}
                     </Btn>
                   </div>
                   <div className="field-hint">
                     Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
-                    {poolActive && (
-                      <>
-                        {' '}
-                        <strong className="text-ink">Not used while a key pool is set up below</strong> — the pool
-                        is what the station calls Google with, and this key is ignored. Remove the pool to go back to a
-                        single key.
-                      </>
-                    )}
                   </div>
+                  {keyVar === 'OPENAI_API_KEY' && (
+                    <div className="field-hint">
+                      This key is shared across LLM and Cloud TTS.
+                    </div>
+                  )}
                 </div>
-
-                {keyVar === 'OPENAI_API_KEY' && (
-                  <div className="field-hint">
-                    This key is shared across LLM and Cloud TTS.
-                  </div>
-                )}
-                {/* The pool editor sits BELOW the single-key field rather than
-                    replacing it, so the operator can see both and is told
-                    plainly which one is live. */}
-                {isGoogle && (
-                  <GoogleKeyPoolEditor
-                    pool={data.env?.GOOGLE_KEY_POOL as GooglePoolState | undefined}
-                    adminFetch={adminFetch}
-                    onChanged={refresh}
-                  />
-                )}
                 {primaryKeyTest && <KeyTestResult result={primaryKeyTest} />}
               </>
             );
@@ -696,6 +724,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
               {primaryDiscovery.models.length > 0 ? (
                 <ModelCombobox
+                  allowCustom
                   models={primaryDiscovery.models}
                   value={form.llm.model}
                   onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, model: v } }))}
@@ -731,7 +760,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             </div>
             <div className="field-hint">
               {primaryDiscovery.models.length > 0
-                ? `${primaryDiscovery.models.length} model${primaryDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.`
+                ? `${primaryDiscovery.models.length} model${primaryDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one or enter a model ID.`
                 : !primaryDiscoveryEnabled
                   ? (form.llm.provider === 'openai-compatible'
                       ? 'Set a base URL above to discover available models.'
@@ -769,7 +798,9 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 (notably Intel/XPU builds) mishandle the guided-decoding backend
                 that <code>required</code> engages, while <code>auto</code> never
                 does. On <code>Auto</code> a capable model still calls the tool;
-                misses fall back to the stateless picker.
+                misses fall back to the stateless picker. Claude Sonnet 5.5,
+                Opus 5.5 and Fable 5 refuse forced tool calls, so they always
+                run on <code>Auto</code> whatever this is set to.
               </div>
             </div>
           )}
@@ -888,6 +919,15 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 </div>
               )}
 
+              {form.llm.fallback.provider === 'openai-compatible' && (
+                <div className="field">
+                  <Label>Backup API behavior</Label>
+                  <Seg value={form.llm.fallback.compatibleMode}
+                    options={[{ id: 'local', label: 'Local model' }, { id: 'hosted', label: 'Hosted service' }]}
+                    onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, compatibleMode: v as 'local' | 'hosted' } } }))} />
+                </div>
+              )}
+
               {form.llm.fallback.provider === 'locca' && (
                 <div className="field">
                   <Label>Backup locca server base URL</Label>
@@ -959,7 +999,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 </>
               )}
 
-              {(form.llm.fallback.provider === 'openai-compatible' || form.llm.fallback.provider === 'locca') && (
+              {(form.llm.fallback.provider === 'locca' || (form.llm.fallback.provider === 'openai-compatible' && form.llm.fallback.compatibleMode === 'local')) && (
                 <div className="field">
                   <Label>Repetition penalty (repeat_penalty)</Label>
                   <Input
@@ -1044,6 +1084,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
                   {fallbackDiscovery.models.length > 0 ? (
                     <ModelCombobox
+                      allowCustom
                       models={fallbackDiscovery.models}
                       value={form.llm.fallback.model}
                       onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, model: v } } }))}
@@ -1079,7 +1120,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 </div>
                 <div className="field-hint">
                   {fallbackDiscovery.models.length > 0
-                    ? `${fallbackDiscovery.models.length} model${fallbackDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.`
+                    ? `${fallbackDiscovery.models.length} model${fallbackDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one or enter a model ID.`
                     : !fallbackDiscoveryEnabled
                       ? (form.llm.fallback.provider === 'openai-compatible'
                           ? 'Set a base URL above to discover available models.'
@@ -1100,8 +1141,9 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 <div>
                   <div className="text-[13px] font-bold">Backup chain-of-thought</div>
                   <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
-                    Whether the backup model may emit a reasoning step. Off by
-                    default, like the primary.
+                    {form.llm.fallback.provider === 'openai-compatible' && form.llm.fallback.compatibleMode === 'hosted'
+                      ? 'Hosted compatible services control their own reasoning; this switch is ignored for this backup.'
+                      : 'Whether the backup model may emit a reasoning step. Off by default, like the primary.'}
                   </div>
                 </div>
                 <Seg
@@ -1126,12 +1168,14 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           <div>
             <div className="text-[13px] font-bold">Chain-of-thought</div>
             <div className="field-hint mt-1 max-w-[440px]">
-              When off, thinking-capable models skip their internal reasoning
+              {form.llm.provider === 'openai-compatible' && form.llm.compatibleMode === 'hosted'
+                ? 'Hosted compatible services control their own reasoning; this switch is ignored for this connection.'
+                : <>When off, thinking-capable models skip their internal reasoning
               step (Ollama, Qwen3, Gemini, OpenAI o-series/gpt-5, Claude,
               DeepSeek). DJ scripts and structured picks are short, so thinking
               mostly just adds latency and cost; leave it off unless your model
               needs it. On Claude and DeepSeek, structured/tool calls always skip
-              thinking anyway, so the toggle only affects free-text lines there.
+              thinking anyway, so the toggle only affects free-text lines there.</>}
             </div>
           </div>
           <Seg
@@ -1172,49 +1216,31 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
       </Card>
 
       {form.llm.provider === 'google' && (
-      <Card title="Gemini Safety Filters" sub="content blocking">
-        <div className="field">
-          <Label>Block categories</Label>
-          <div className="mt-2 flex flex-col gap-2">
-            {[
-              { id: 'harassment', label: 'Harassment' },
-              { id: 'hateSpeech', label: 'Hate Speech' },
-              { id: 'sexuallyExplicit', label: 'Sexually Explicit' },
-              { id: 'dangerousContent', label: 'Dangerous Content' },
-            ].map(c => (
-              <label key={c.id} className="flex cursor-pointer items-center gap-2 text-[13px] leading-[1.5] text-ink">
-                <input
-                  type="checkbox"
-                  checked={!!form.llm.geminiSafety?.[c.id as keyof typeof form.llm.geminiSafety]}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    setForm(f => ({
-                      ...f,
-                      llm: {
-                        ...f.llm,
-                        geminiSafety: {
-                          ...(f.llm.geminiSafety || { harassment: false, hateSpeech: false, sexuallyExplicit: false, dangerousContent: false }),
-                          [c.id]: e.target.checked
-                        }
-                      }
-                    }))
-                  }
-                  className="accent-[var(--accent)]"
-                />
-                <span>{c.label}</span>
-              </label>
-            ))}
-          </div>
-          <div className="field-hint mt-2">
-            Google-only content blocking, sent on the native <code>google</code> provider
-            leg. Check a category to have Gemini block it; uncheck to allow swearing or
-            sensitive topics. Other providers ignore these flags.
-          </div>
-          <div className="field-hint mt-2">
-            These boxes apply to the primary leg. A <code>google</code> fallback leg
-            carries its own set of flags.
-          </div>
-        </div>
-      </Card>
+        <Card title="Gemini safety filters" sub="primary model">
+          <GeminiSafetyEditor
+            value={form.llm.geminiSafety}
+            idPrefix="primary-gemini-safety"
+            onChange={(category, checked) => setForm(f => ({
+              ...f, llm: { ...f.llm, geminiSafety: { ...f.llm.geminiSafety, [category]: checked } },
+            }))}
+          />
+        </Card>
+      )}
+
+      {form.llm.fallback.enabled && form.llm.fallback.provider === 'google' && (
+        <Card title="Fallback Gemini safety filters" sub="backup model">
+          <GeminiSafetyEditor
+            value={form.llm.fallback.geminiSafety}
+            idPrefix="fallback-gemini-safety"
+            onChange={(category, checked) => setForm(f => ({
+              ...f,
+              llm: { ...f.llm, fallback: {
+                ...f.llm.fallback,
+                geminiSafety: { ...f.llm.fallback.geminiSafety, [category]: checked },
+              } },
+            }))}
+          />
+        </Card>
       )}
 
       <Card title="Next-track picker" sub="how the DJ chooses">
@@ -1352,13 +1378,14 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             className="max-w-[200px]"
           />
           <div className="field-hint">
-            How many slots the DJ waits before returning to an artist. The pick is
-            re-taken from the run&apos;s other candidates when it lands inside the
-            window &mdash; and quietly stands if nothing fresher turned up, so this
-            never costs you a track. Raise it on a deep library where one artist
-            keeps circling back; lower it if the DJ is reaching too far from the
-            show&apos;s sound. {' '}<strong>0 = off</strong>, though an artist can
-            never follow itself whatever this says. 0&ndash;25.
+            Best-effort artist spacing across queued, on-air and recent tracks.
+            The agent tries another eligible candidate; the candidate pool
+            prefers artists outside this window, including when its model call
+            fails. Spacing can relax when eligible choices are limited or an
+            agent re-pick fails, and the picker logs why. {' '}<strong>0 = off</strong>.
+            The agent still tries to avoid repeating its pick-anchor artist.
+            Listener requests are exempt. Emergency playlist playback has no
+            live spacing check. 0&ndash;25.
           </div>
         </div>
 
@@ -1509,53 +1536,6 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
       </Card>
       </Advanced>
 
-      <Card title="Task Model Overrides" sub="route specific agent tasks to a different model">
-        <div className="grid gap-[18px]">
-          <div className="field-hint">
-            The tasks below default to using the primary model. To route a heavy task to a larger
-            model while keeping the station running on a smaller, faster model, select an override
-            below. Overrides apply to the <strong>primary provider</strong> only — leave blank for the primary model.
-          </div>
-          {[
-            { id: 'generateBanter', label: 'Presenter Banter', desc: 'Multi-speaker conversation between personas' },
-            { id: 'djAgentSegment', label: 'Script Generation', desc: 'Single-speaker scripts for news, weather, deep-cuts' },
-            { id: 'djAgentPick', label: 'Track Selection', desc: 'The AI DJ picking the next track' },
-            { id: 'djAgentRequest', label: 'Listener Requests', desc: 'Negotiation and fulfillment of track requests' },
-            { id: 'matchRequest', label: 'Request Matcher', desc: 'Matching request text against the library' },
-            { id: 'identifyRequest', label: 'Search Identifier', desc: 'Web search to identify a vague request' },
-          ].map(task => (
-            <div className="field" key={task.id}>
-              <Label>{task.label}</Label>
-              <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
-                {primaryDiscovery.models.length > 0 ? (
-                  <ModelCombobox
-                    models={primaryDiscovery.models}
-                    value={form.llm.modelOverrides?.[task.id] || ''}
-                    onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, modelOverrides: { ...(f.llm.modelOverrides || {}), [task.id]: v } } }))}
-                    placeholder="Use primary model"
-                  />
-                ) : (
-                  <Input
-                    value={form.llm.modelOverrides?.[task.id] || ''}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                      setForm(f => ({ ...f, llm: { ...f.llm, modelOverrides: { ...(f.llm.modelOverrides || {}), [task.id]: e.target.value } } }))
-                    }
-                    placeholder="Use primary model (or type model ID)"
-                    className="max-w-[360px]"
-                  />
-                )}
-                {!!form.llm.modelOverrides?.[task.id] && (
-                  <Btn sm onClick={() => setForm(f => ({ ...f, llm: { ...f.llm, modelOverrides: { ...(f.llm.modelOverrides || {}), [task.id]: '' } } }))}>
-                    Clear
-                  </Btn>
-                )}
-              </div>
-              <div className="field-hint">{task.desc}</div>
-            </div>
-          ))}
-        </div>
-      </Card>
-
       <SaveBar
         note={`Active model: ${data.llm?.active}. Applies to the next LLM call, no restart needed.`}
         busy={busy}
@@ -1573,8 +1553,6 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         )}
       />
 
-      {/* The SAFE outcome (keep the embedding pin) is the default; only the explicit
-          confirm re-embeds on the new provider. */}
       <V3AlertDialog
         open={embedPinNotice != null}
         onOpenChange={(o) => { if (!o) setEmbedPinNotice(null); }}

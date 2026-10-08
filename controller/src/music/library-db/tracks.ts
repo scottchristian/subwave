@@ -14,6 +14,13 @@ export function getTrack(id: string): TrackRecord | null {
   return row ? rowToTrack(row) : null;
 }
 
+export function getTaggedAt(id: string): string | null {
+  const row = requireDb()
+    .prepare<[string], Pick<TrackRow, 'tagged_at'>>('SELECT tagged_at FROM tracks WHERE id = ?')
+    .get(id);
+  return row?.tagged_at ?? null;
+}
+
 export interface TrackLite {
   genres: string[];
   genre: string | null;
@@ -84,11 +91,12 @@ export function getAlbumFacts(id: string): { isCompilation: boolean | null; year
   };
 }
 
-// Coverage meter's "tagged" tally. Predicate is `moods IS NOT NULL` to match
-// allTaggedIds() exactly, not the stricter SQL_HAS_MOODS.
+// Coverage meter's "tagged" tally. Keep this aligned with allTaggedIds() and
+// the rest of the tagged-library reads: empty mood arrays are uncertainty
+// results, not completed tags.
 export function countTagged(): number {
   return (
-    requireDb().prepare(`SELECT COUNT(*) AS n FROM tracks WHERE moods IS NOT NULL`).get() as {
+    requireDb().prepare(`SELECT COUNT(*) AS n FROM tracks WHERE ${SQL_HAS_MOODS}`).get() as {
       n: number;
     }
   ).n;

@@ -1,15 +1,10 @@
-// Atomic file replacement: write a temp beside the target, then rename(2) over
-// it, so Liquidsoap's polls and the durable JSON writers never see a truncated
-// file. The temp carries a random suffix (two un-serialised writers must not
-// rename each other's temp into place) and sits next to the target so the
-// rename never crosses a filesystem.
-//
-// A failed write removes its temp — nothing else can ever find that name, and
-// for the scheduled backup it would be a partial multi-hundred-MB zip. The
-// ORIGINAL error still propagates; cleanup must not mask it.
+// Write a uniquely named temp beside the target, then rename to prevent partial reads.
+// Adjacent temps keep rename on one filesystem; unique suffixes isolate concurrent writers.
+// Remove failed temps without masking the original error.
 
 import { randomBytes } from 'node:crypto';
-import { renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { closeSync, fsyncSync, linkSync, openSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { rename, unlink, writeFile } from 'node:fs/promises';
 
 export async function writeFileAtomic(
@@ -47,12 +42,26 @@ export function createSerialFileWriter(path: string) {
 export function writeFileAtomicSync(
   path: string,
   contents: string | Buffer,
-  { mode }: { mode?: number } = {},
+  { mode, durable = false, replace = true }: { mode?: number; durable?: boolean; replace?: boolean } = {},
 ): void {
   const tmp = `${path}.${randomBytes(4).toString('hex')}.tmp`;
   try {
     writeFileSync(tmp, contents, mode != null ? { mode } : {});
-    renameSync(tmp, path);
+    if (durable) {
+      const fd = openSync(tmp, 'r');
+      try { fsyncSync(fd); } finally { closeSync(fd); }
+    }
+    if (replace) renameSync(tmp, path);
+    else {
+      // Claim an immutable recovery snapshot without replacing another boot's
+      // journal. link(2) publishes atomically and refuses an existing target.
+      linkSync(tmp, path);
+      unlinkSync(tmp);
+    }
+    if (durable) {
+      const fd = openSync(dirname(path), 'r');
+      try { fsyncSync(fd); } finally { closeSync(fd); }
+    }
   } catch (err) {
     try { unlinkSync(tmp); } catch {}
     throw err;

@@ -1,8 +1,6 @@
 'use client';
 
-// Skills editor. A skill only fires autonomously when it is enabled here AND
-// assigned to the persona on air. "Run now" is an operator override: it bypasses
-// the enable toggle, the persona assignment, the frequency gate and the cooldown.
+// Run now bypasses enablement, persona assignment, frequency, and cooldown.
 import type { ReactNode } from 'react';
 import { useMemo, useRef, useState } from 'react';
 import { cn } from '../../lib/cn';
@@ -41,6 +39,7 @@ interface ShowLite {
   name: string;
   personaId: string;
   segmentSkill: string;
+  preparationSkill: string;
 }
 
 // Does this persona run the skill? `skills: null` is the "all skills" sentinel.
@@ -104,7 +103,7 @@ export default function SkillsPanel() {
   const settingsQuery = useSettingsQuery<{
     values?: {
       personas?: Array<{ id?: string; name?: string; skills?: string[] | null }>;
-      shows?: Array<{ id?: string; name?: string; personaId?: string; segmentSkill?: string }>;
+      shows?: Array<{ id?: string; name?: string; personaId?: string; segmentSkill?: string; preparationSkill?: string }>;
     };
   }>({ adminFetch, enabled: queryEnabled });
   const skills = skillsQuery.data ?? null;
@@ -128,6 +127,7 @@ export default function SkillsPanel() {
         name: String(s.name || ''),
         personaId: String(s.personaId || ''),
         segmentSkill: typeof s.segmentSkill === 'string' ? s.segmentSkill : '',
+        preparationSkill: typeof s.preparationSkill === 'string' ? s.preparationSkill : '',
       })).filter(s => s.id) as ShowLite[],
     };
   }, [settingsQuery.data]);
@@ -284,7 +284,7 @@ export default function SkillsPanel() {
     }
     const show = shows.find(x => x.id === who.slice(2));
     if (!show) return true;
-    if (show.segmentSkill === s.name) return true; // the show's pinned feature
+    if (show.segmentSkill === s.name || show.preparationSkill === s.name) return true; // the show's pinned feature
     const host = personas.find(x => x.id === show.personaId);
     return !!host && personaHasSkill(host, s.name);
   };
@@ -328,8 +328,10 @@ export default function SkillsPanel() {
   };
 
   // Only meaningful while the DJ/show filter is sitting on a show.
-  const isPinned = (s: Skill): boolean =>
-    who.startsWith('s:') && shows.find(x => x.id === who.slice(2))?.segmentSkill === s.name;
+  const isPinned = (s: Skill): boolean => {
+    const show = who.startsWith('s:') ? shows.find(x => x.id === who.slice(2)) : null;
+    return !!show && (show.segmentSkill === s.name || show.preparationSkill === s.name);
+  };
 
   return (
     <div className="grid gap-4">
@@ -365,8 +367,6 @@ export default function SkillsPanel() {
             Read this in the manual ↗
           </a>
         </div>
-        {/* Full-width row of its own on phones: an `ml-auto` cluster pushed
-            COMMUNITY / NEW SKILL off the right edge at 390px. */}
         <div className="flex flex-wrap items-center gap-x-4 gap-y-3 bg-[var(--ink-softer)] p-3.5">
           <span className="caption">
             {filtered ? `${visible.length} of ${skills.length}` : skills.length} skill{skills.length === 1 ? '' : 's'}
@@ -435,8 +435,6 @@ export default function SkillsPanel() {
               </SelectContent>
             </Select>
           )}
-          {/* Status + sort own one phone row. The wrapper is `display:contents`
-              from sm: up, so on desktop both selects are direct children. */}
           <div className="flex w-full gap-2 sm:contents">
             <Select value={status} onValueChange={v => setStatus(v as StatusFilter)}>
               <SelectTrigger className="min-w-0 flex-1 sm:w-[130px] sm:flex-none" aria-label="Filter by status">
@@ -561,8 +559,6 @@ export default function SkillsPanel() {
                 <Icon size={20} strokeWidth={1.75} aria-hidden />
               </span>
 
-              {/* Text stack and toggle rail are siblings, so the taller rail
-                  never inflates the name row. */}
               <div className="flex min-w-0 flex-1 items-start gap-3">
                 <div className="grid min-w-0 flex-1 gap-2.5">
                   <div className="flex min-w-0 items-center gap-2">
