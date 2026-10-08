@@ -1,10 +1,12 @@
 'use client';
 
 import type { ChangeEvent } from 'react';
+import { settingsForm } from './settings/form-state';
+import { atPath, samePath, sameForm, countLeafDiffs, dirtyPaths, ownsErrorPath, mergePatchErrors } from './settings/form-diff';
+import { archivesSavePayload, dangerSavePayload } from './settings/save-payload';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { notify, errorMessage } from '../../lib/notify';
-import { normalizeStationLocale } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
 import {
   AdminResponseError,
@@ -27,13 +29,10 @@ import {
   SETTINGS_AAC_BITRATES,
   SETTINGS_MP3_BITRATES,
   SETTINGS_OPUS_BITRATES,
-  TRANSITION_EFFECTS,
-  normalizeGeminiSafety,
 } from '@/lib/schemas.generated';
 import { AlertTriangle } from 'lucide-react';
 import {
-  SectionHeader, SaveBar, SettingsFieldError, ELEVENLABS_VS_DEFAULTS, FISH_TTS_DEFAULTS,
-  headerRows,
+  SectionHeader, SaveBar, SettingsFieldError,
   type FormState, type FormUpdater, type SettingsData, type SaveSettings,
   type LoudnessSource, type TransitionEffect,
 } from './settings/shared';
@@ -97,60 +96,6 @@ const TRANSITION_EFFECT_FIELDS = [
   },
 ] as const satisfies readonly { id: TransitionEffect; label: string; hint: string }[];
 
-/**
- * Read one dotted path out of the form. Returns undefined for a missing branch
- * rather than throwing, so a path that names a key a given settings.json has
- * never carried compares equal on both sides and reads as clean.
- */
-function atPath(form: FormState | null, path: string): unknown {
-  let node: unknown = form;
-  for (const key of path.split('.')) {
-    if (!node || typeof node !== 'object') return undefined;
-    node = (node as Record<string, unknown>)[key];
-  }
-  return node;
-}
-
-const samePath = (a: FormState | null, b: FormState | null, path: string) =>
-  JSON.stringify(atPath(a, path) ?? null) === JSON.stringify(atPath(b, path) ?? null);
-
-/**
- * How many individual controls differ between two form branches.
- *
- * Counting LEAVES, not top-level keys: `requests` is one key holding seven
- * fields, and "1 unsaved change" under a card where the operator just edited
- * three of them reads as a bug in the counter.
- */
-function countLeafDiffs(a: unknown, b: unknown): number {
-  if (JSON.stringify(a ?? null) === JSON.stringify(b ?? null)) return 0;
-  const plain = (v: unknown): v is Record<string, unknown> =>
-    !!v && typeof v === 'object' && !Array.isArray(v);
-  // An array is one control (the TTS corrections list, the compat params
-  // table), not one control per row.
-  if (!plain(a) || !plain(b)) return 1;
-  let n = 0;
-  for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
-    n += countLeafDiffs(a[key], b[key]);
-  }
-  return n;
-}
-
-/**
- * The paths a section owns that differ from the last saved baseline.
- *
- * Diffing against the BASELINE rather than the server's current values is what
- * makes the count survive the 3s refetch: the baseline only moves when a save
- * succeeds, so an operator mid-edit keeps seeing their own change count.
- */
-function dirtyPaths(
-  form: FormState | null,
-  baseline: FormState | null,
-  paths: readonly string[],
-): string[] {
-  if (!form || !baseline) return [];
-  return paths.filter(path => !samePath(form, baseline, path));
-}
-
 // The three encoder vocabularies, from the mirror rather than re-typed. radio.liq
 // has a literal `%mp3(bitrate=…)` branch per value, so each set is genuinely
 // fixed — but "fixed" is why a hand-copied list is dangerous rather than safe:
@@ -161,90 +106,12 @@ const OPUS_BITRATES = SETTINGS_OPUS_BITRATES;
 const AAC_BITRATES = SETTINGS_AAC_BITRATES;
 
 /**
- * Settings keys a save posts under a name the FormState does NOT use.
- *
- * `rebaselineSavedPatch` already re-homes the VALUES (audio.stemCache* is edited
- * as `transitions.*`); anything that scopes by FormState key has to follow the
- * same map or it misses the alias. Discard is the case that bites: rolling back
- * `transitions` while leaving the `audio.stemCacheGb` message on screen parks an
- * error under a value that no longer produced it.
- */
-const FORM_KEY_ALIASES: Record<string, readonly string[]> = {
-  transitions: ['audio'],
-};
-
-/** Does `path` belong to any of these FormState keys, alias included? */
-function ownsErrorPath(formKeys: readonly string[], path: string): boolean {
-  const under = (key: string) => path === key || path.startsWith(`${key}.`);
-  return formKeys.some(key => under(key) || (FORM_KEY_ALIASES[key] ?? []).some(under));
-}
-
-/**
- * Replace exactly the errors belonging to the keys this patch carried.
- *
- * Scoped by TOP-LEVEL key, because that is the unit a save button posts and the
- * unit the controller reports against: a `{beds: …}` save owns every
- * `beds.*` error and nothing else. Merging blindly would let a fixed field keep
- * showing its old message; clearing everything would wipe an unrelated
- * section's unresolved error the moment any other control saved.
- */
-function mergePatchErrors(
-  prev: Record<string, string>,
-  patch: Record<string, unknown>,
-  next: Record<string, string> | undefined,
-): Record<string, string> {
-  const owned = Object.keys(patch);
-  const isOwned = (path: string) =>
-    owned.some((key) => path === key || path.startsWith(`${key}.`));
-  const out: Record<string, string> = {};
-  for (const [path, message] of Object.entries(prev)) {
-    if (!isOwned(path)) out[path] = message;
-  }
-  for (const [path, message] of Object.entries(next || {})) out[path] = message;
-  return out;
-}
-
-/**
  * How long a search jump waits for its target card to mount, in animation
  * frames (~1s at 60Hz). Generous on purpose: the cost of waiting is invisible
  * — the scroll simply happens on the frame the card appears — while the cost of
  * giving up early is a jump that silently does nothing.
  */
 const JUMP_MAX_FRAMES = 60;
-
-/**
- * Collector for the number boxes in a whole-block save.
- *
- * Archives and the danger zone post EVERY field on every click, so a box the
- * operator cleared and has not refilled rides along with whatever they actually
- * edited — and neither JS coercion fails safely there. `Number('')` is 0, which
- * is a VALID listener buffer and a valid retention window, so saving an AAC
- * toggle would quietly set the buffer to 0s and flag a mixer restart.
- * `parseInt('')` is NaN, which JSON.stringify posts as `null` and fails the
- * whole block with a message pointing at a field nobody touched.
- *
- * So a blank box refuses the save and names itself instead. An explicitly typed
- * `0` still parses, which is what keeps "0 = no limit" on max track length.
- */
-function numberFields() {
-  const bad: Record<string, string> = {};
-  const read = (path: string, raw: string, parse: (s: string) => number) => {
-    const text = String(raw).trim();
-    // Blank is checked before the parser, not by it: Number('') is a finite 0.
-    const n = text ? parse(text) : NaN;
-    if (Number.isFinite(n)) return n;
-    bad[path] = 'enter a number';
-    return 0;
-  };
-  return {
-    bad,
-    int: (path: string, raw: string) => read(path, raw, t => parseInt(t, 10)),
-    float: (path: string, raw: string) => read(path, raw, t => parseFloat(t)),
-    num: (path: string, raw: string) => read(path, raw, Number),
-  };
-}
-
-const sameForm = (a: FormState, b: FormState) => JSON.stringify(a) === JSON.stringify(b);
 
 export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabled?: boolean }) {
   const sections = useMemo(
@@ -286,11 +153,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
     setLocalDirty(prev => (!!prev[id] === dirty ? prev : { ...prev, [id]: dirty }));
   }, []);
 
-  // RETURNS the refetch result rather than discarding it. `refetch` resolves with
-  // `{ isError: true }` on failure instead of throwing, and the key-pool editor
-  // reads that outcome to decide whether its rows may be unlocked — a discarded
-  // result is indistinguishable from a successful one.
-  const refresh = async () => settingsQuery.refetch();
+  const refresh = async () => { await settingsQuery.refetch(); };
 
   const saveMutation = useSettingsMutation<SettingsData>({ adminFetch });
   const busy = commandBusy || saveMutation.isPending;
@@ -316,6 +179,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
 
   useEffect(() => {
     if (!data?.values) return;
+
     const v = data.values;
     const nextForm: FormState = {
       crossfadeDuration: String(v.crossfadeDuration ?? ''),
@@ -484,6 +348,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
       llm: {
         provider: v.llm?.provider ?? 'ollama',
         model: v.llm?.model ?? '',
+        modelOverrides: (v.llm as { modelOverrides?: Record<string, string> })?.modelOverrides ?? {},
         ollamaUrl: v.llm?.ollamaUrl ?? '',
         numCtx: typeof v.llm?.numCtx === 'number' ? v.llm.numCtx : 16384,
         repeatPenalty: typeof v.llm?.repeatPenalty === 'number' ? v.llm.repeatPenalty : 1.15,
@@ -497,6 +362,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
           const prov = llmAny?.provider ?? 'ollama';
           return legacy ? { [prov]: legacy } : {};
         })(),
+        modelOverrides: (v.llm as { modelOverrides?: Record<string, string> })?.modelOverrides ?? {},
         headers: headerRows(v.llm?.headers),
         compatibleMode: v.llm?.compatibleMode === 'hosted' ? 'hosted' : 'local',
         reasoning: !!v.llm?.reasoning,
@@ -611,6 +477,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
         windowDays: String(v.likes?.windowDays ?? 30),
       },
     };
+
     const revision = settingsQuery.dataUpdatedAt;
     if (revision && appliedRevisionRef.current !== revision) {
       pendingFormRevisionRef.current = { revision, form: nextForm };
@@ -718,12 +585,12 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
 
   /**
    * Post a whole-block patch — unless a number box in it was left blank, in
-   * which case name the box and save nothing. See `numberFields`.
+   * which case name the box and save nothing. See `save-payload.ts`.
    */
-  const saveBlock = (n: ReturnType<typeof numberFields>, patch: Record<string, unknown>) => {
-    const blanks = Object.keys(n.bad);
+  const saveBlock = ({ patch, fieldErrors }: ReturnType<typeof dangerSavePayload> | ReturnType<typeof archivesSavePayload>) => {
+    const blanks = Object.keys(fieldErrors);
     if (blanks.length > 0) {
-      setFieldErrors(prev => mergePatchErrors(prev, patch, n.bad));
+      setFieldErrors(prev => mergePatchErrors(prev, patch, fieldErrors));
       notify.err(blanks.length === 1
         ? 'a number field is empty — fill it in before saving'
         : `${blanks.length} number fields are empty — fill them in before saving`);
@@ -744,63 +611,11 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
    * is a blank number box, which is why both go through `saveBlock`.
    */
   const saveArchives = () => {
-    if (!form) return;
-    const n = numberFields();
-    saveBlock(n, {
-      archive: {
-        enabled: form.archive.enabled,
-        bitrate: n.int('archive.bitrate', form.archive.bitrate),
-        retentionDays: n.int('archive.retentionDays', form.archive.retentionDays),
-      },
-    });
+    if (form) saveBlock(archivesSavePayload(form));
   };
 
   const saveDanger = () => {
-    if (!form) return;
-    const n = numberFields();
-    saveBlock(n, {
-      crossfadeDuration: n.float('crossfadeDuration', form.crossfadeDuration),
-      ducking: {
-        voice: n.float('ducking.voice', form.ducking.voice),
-        intro: n.float('ducking.intro', form.ducking.intro),
-      },
-      maxTrackLengthMode: form.maxTrackLengthMode,
-      maxTrackSeconds: n.int('maxTrackSeconds', form.maxTrackSeconds),
-      fadeAtShowEnd: form.fadeAtShowEnd,
-      silenceTrim: {
-        enabled: form.silenceTrim.enabled,
-        minGapMs: n.int('silenceTrim.minGapMs', form.silenceTrim.minGapMs),
-      },
-      transitions: {
-        pairDrain: form.transitions.pairDrain,
-        stemBlends: form.transitions.stemBlends,
-        effects: form.transitions.effects,
-      },
-      audio: {
-        stemCache: form.transitions.stemCache,
-        stemCacheGb: n.num('audio.stemCacheGb', form.transitions.stemCacheGb),
-      },
-      loudness: {
-        targetLufs: n.float('loudness.targetLufs', form.loudness.targetLufs),
-        maxBoostDb: n.float('loudness.maxBoostDb', form.loudness.maxBoostDb),
-        source: form.loudness.source,
-      },
-      stream: {
-        idleWhenEmpty: form.stream.idleWhenEmpty,
-        idleAfterMinutes: n.int('stream.idleAfterMinutes', form.stream.idleAfterMinutes),
-        opusEnabled: form.stream.opusEnabled,
-        opusBitrate: n.int('stream.opusBitrate', form.stream.opusBitrate),
-        flacEnabled: form.stream.flacEnabled,
-        oggIcyMetadata: form.stream.oggIcyMetadata,
-        aacEnabled: form.stream.aacEnabled,
-        aacBitrate: n.int('stream.aacBitrate', form.stream.aacBitrate),
-        bitrate: n.int('stream.bitrate', form.stream.bitrate),
-        bufferSeconds: n.num('stream.bufferSeconds', form.stream.bufferSeconds),
-        maxListeners: n.int('stream.maxListeners', form.stream.maxListeners),
-        countryHeader: form.stream.countryHeader,
-        geoipDbPath: form.stream.geoipDbPath,
-      },
-    });
+    if (form) saveBlock(dangerSavePayload(form));
   };
 
   const activeSpec = sectionById(activeSection);
@@ -952,15 +767,6 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
         )}
         {!data && !err && <SkeletonForm fields={5} />}
 
-        {/* One save bar per section, sticky, and only while something is
-            unsaved. Each section's own SaveBar portals its note + button into
-            the slot below, so the wording, the patch and the error scoping
-            still belong to the section that knows them.
-
-            top-[3.25rem] clears AdminShell's own sticky header (top-0, ~49px
-            tall) rather than tucking under it like the section rail does — this
-            is the one strip that has to stay readable while the operator
-            scrolls a long section looking for what they changed. */}
         {sectionDirty && (
           <div className="sticky top-[3.25rem] z-30 grid gap-2.5 border border-vermilion bg-bg p-3 shadow-drawer">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -1053,8 +859,6 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
           </>
           );
         })()}
-        {/* Self-contained panels — each re-calls useAdminAuth and owns its
-            own data fetch, so they render outside the data && form guard. */}
         {activeSection === 'archives' && (
           <>
             <ArchivesPanel />
@@ -1200,8 +1004,6 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
               <Card title="Idle pause" sub="silence the programme when nobody is listening">
                 <div className="field">
                   <Label>Pause when the room is empty</Label>
-                  {/* Seg + "after" + minutes + "min" + Save is wider than a
-                      phone card, so the row wraps below 640px. */}
                   <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
                     <Seg
                       options={[
@@ -1412,8 +1214,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                       />
                       <span className="text-sm opacity-70">
                         GB &middot; holds ~
-                        {/* /25 mirrors the controller's stem-cache APPROX_TRACK_BYTES
-                            ceiling, /13 the field-measured average (#1257). */}
+                        {/* Track counts use the controller's 25 MB ceiling and the measured 13 MB average. */}
                         {Math.floor(
                           ((Number(form.transitions.stemCacheGb) || 15) * 1024) / 25,
                         ).toLocaleString('en-GB')}
@@ -1856,18 +1657,19 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                     (FLAC/ALAC/WAV); for a lossy-source library (e.g. AAC/MP3) it faithfully
                     carries lossy audio and adds no fidelity over MP3/Opus. Meant for external
                     players (VLC, foobar2000, a network streamer); the web and mobile players
-                    stay on MP3/Opus and won&apos;t auto-select it. The mandatory{' '}
-                    <code>/stream.mp3</code> mount always serves everyone.
+                    stay on MP3/Opus and won&apos;t auto-select it. Changing title, artist, and
+                    album metadata is carried automatically as native chained Ogg tags. The
+                    mandatory <code>/stream.mp3</code> mount always serves everyone.
                   </div>
                 </div>
               </Card>
             )}
 
             {form && (
-              <Card title="Ogg metadata" sub="ICY titles on /stream.opus + /stream.flac">
+              <Card title="Ogg metadata" sub="Opus ICY compatibility; FLAC tags are automatic">
                 <div className="field">
                   <div className="flex items-center gap-2">
-                    <Label>Push ICY track titles on the Ogg mounts</Label>
+                    <Label>Push ICY track titles on the Opus mount</Label>
                     <Pill tone="ink">restart required</Pill>
                   </div>
                   <div className="flex items-center gap-2">
@@ -1886,13 +1688,12 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                   </div>
                   <SettingsFieldError path="stream.oggIcyMetadata" errors={fieldErrors} />
                   <div className="field-hint">
-                    On by default. Sends each track&apos;s title out-of-band (ICY) on the Opus and
-                    FLAC mounts, which most internet-radio players and Cast receivers need: they
-                    read the in-band Ogg tags only once, at connect, and otherwise stay stuck on
-                    the first title. Turn it <strong>off</strong> if your listeners use
-                    foobar2000: it reads the in-band tags correctly, and the extra ICY channel
-                    breaks its FLAC metadata display. The MP3 and AAC mounts always use ICY and
-                    are unaffected either way.
+                    On by default for legacy Opus compatibility. This controls out-of-band ICY
+                    updates on <code>/stream.opus</code> only. <code>/stream.flac</code> always
+                    carries changing title, artist, and album metadata as native chained Ogg tags;
+                    a missing <code>Icy-MetaInt</code> response header there is expected. Receiver
+                    support varies, and this setting does not embed or guarantee artwork. MP3 and
+                    AAC behavior is unaffected.
                   </div>
                 </div>
               </Card>

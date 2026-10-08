@@ -427,8 +427,6 @@ export interface ManualTagContext {
   moodNames: string[] | null;
 }
 
-export const MANUAL_TAG_SHAPE_ONLY: ManualTagContext = { moodNames: null };
-
 export function manualTagSchema(ctx: ManualTagContext) {
   return z.object({
     // A blank string is refused too, with the same message.
@@ -733,6 +731,10 @@ export const PERSONA_LANGUAGE_MAX = 60;
 export const PERSONA_VOICE_STYLE_MAX = 150;
 // A soul rides in the system prompt on every call: a per-call token cost.
 export const PERSONA_SOUL_MAX = 2000;
+// Unlike Soul, musical leanings are a compact backstage selection cue. Keeping
+// this deliberately shorter prevents a second persona prompt from growing into
+// an unbounded editorial brief on every pick.
+export const PERSONA_MUSIC_LEAN_MAX = 500;
 export const PERSONA_SKILLS_LIMIT = 64;
 
 // Freeform organisation tags. Third copy of one pattern (skill.ts, show.ts) —
@@ -1115,6 +1117,7 @@ export interface PersonaParsed {
   localColour: number;
   warmth: number;
   soul: string;
+  musicLean: string;
   language: string;
   voiceStyle: string;
   avatar: string;
@@ -1168,6 +1171,9 @@ export const personaSchema = z
   .object({
     name: personaCoercedText('name', 1, PERSONA_NAME_MAX),
     soul: personaCoercedText('soul', 1, PERSONA_SOUL_MAX),
+    // A private, music-specific editorial preference. It never changes the
+    // presenter's voice and never overrides show filters or safety policy.
+    musicLean: personaCoercedText('musicLean', 0, PERSONA_MUSIC_LEAN_MAX),
     tagline: personaCoercedText('tagline', 0, PERSONA_TAGLINE_MAX),
     // Optional free text. Absent/empty → '' (English, no directive injected).
     // Unlike name/soul this REFUSES a non-string instead of coercing.
@@ -1281,6 +1287,7 @@ export const personaSchema = z
       localColour: p.localColour,
       warmth: p.warmth,
       soul: p.soul,
+      musicLean: p.musicLean,
       language: p.language,
       voiceStyle: p.voiceStyle,
       avatar: p.avatar,
@@ -1314,6 +1321,9 @@ export function repairPersonaForLoad(
     id: typeof raw.id === 'string' && PERSONA_ID_RE.test(raw.id) ? raw.id : undefined,
     name: typeof raw.name === 'string' ? raw.name.trim().slice(0, PERSONA_NAME_MAX) : undefined,
     soul: typeof raw.soul === 'string' ? raw.soul.trim().slice(0, PERSONA_SOUL_MAX) : undefined,
+    musicLean: typeof raw.musicLean === 'string'
+      ? raw.musicLean.trim().slice(0, PERSONA_MUSIC_LEAN_MAX)
+      : '',
     tagline:
       typeof raw.tagline === 'string' ? raw.tagline.trim().slice(0, PERSONA_TAGLINE_MAX) : '',
     language:
@@ -1599,6 +1609,37 @@ export type PlaybackFailureHistory = z.output<typeof playbackFailureHistorySchem
 // rejects is the operator's input being WRONG: a save with no name, an append
 // with no ids, a patch that changes nothing, a generate with nothing to
 // generate from.
+
+export const playlistGenerationResultSchema = z.object({
+  tracks: z.array(z.object({
+    id: z.string(),
+    title: z.string(),
+    artist: z.string(),
+    album: z.string(),
+    durationSec: z.number(),
+    year: z.number().nullable(),
+    genre: z.string().nullable(),
+    energy: z.string().nullable(),
+    moods: z.array(z.string()),
+    instrumental: z.boolean().nullable(),
+  })),
+  name: z.string().optional(),
+  description: z.string().optional(),
+  degraded: z.boolean(),
+  reasons: z.array(z.string()),
+  poolSize: z.number(),
+  usedFallback: z.boolean(),
+});
+
+export const playlistGenerationStartSchema = z.object({ jobId: z.string().min(1) });
+
+export const playlistGenerationPollSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('running') }),
+  z.object({ status: z.literal('error'), error: z.string().optional() }),
+  z.object({ status: z.literal('done'), result: playlistGenerationResultSchema }),
+]);
+
+export type PlaylistGenerationResult = z.infer<typeof playlistGenerationResultSchema>;
 
 // The one cap a playlist name gets. It exists so an API caller can't store a
 // name the library list then has to render; the save modal's input runs the
@@ -2197,6 +2238,25 @@ export const scheduleOverrideRequestSchema = z
       });
     }
   });
+
+// ─── from controller/src/schemas/session-archives.ts ─────────────────────
+
+// Read only the fields needed by the archive list; old sessions may omit them.
+export const sessionArchiveSummaryInput = z.object({
+  id: z.string().optional(),
+  kind: z.string().optional(),
+  key: z.string().optional(),
+  startedAt: z.string().optional(),
+  endedAt: z.string().nullable().optional(),
+  show: z.object({ name: z.string().optional() }).nullable().optional(),
+  persona: z.object({ name: z.string().optional() }).nullable().optional(),
+  messages: z.unknown().optional(),
+});
+
+export const sessionArchivePageQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+  offset: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),
+});
 
 // ─── from controller/src/schemas/settings.ts ─────────────────────────────
 
@@ -3094,7 +3154,13 @@ export const djBehaviourPatchSchema = settingsBlockOf({
     DJ_RECAP_CHARS_BOUNDS,
     'djBehaviour.recapChars must be a whole number between 40 and 1000',
   ),
+  allowRequestShoutOuts: z.boolean({ error: 'djBehaviour.allowRequestShoutOuts must be a boolean' }),
+  allowRequestSkills: z.boolean({ error: 'djBehaviour.allowRequestSkills must be a boolean' }),
+  requestChatPrompt: settingsTrimmedString(10000, 'djBehaviour.requestChatPrompt must be 10000 characters or fewer'),
+  requestTrackPrompt: settingsTrimmedString(10000, 'djBehaviour.requestTrackPrompt must be 10000 characters or fewer'),
 });
+
+
 
 /**
  * Station default for the show-boundary fade (#1574). Strict boolean, the same
@@ -3794,6 +3860,67 @@ export function isGeminiLibraryLanguage(raw: unknown): boolean {
   return v === '' || (v.length <= GEMINI_LIBRARY_LANGUAGE_MAX && BCP47.test(v));
 }
 
+// ─── from controller/src/schemas/show-preparation.ts ─────────────────────
+
+export const preparationResultSchema = z.discriminatedUnion('available', [
+  z.object({ available: z.literal(false), reason: z.string().max(500).optional() }),
+  z.object({
+    available: z.literal(true),
+    subject: z.string().trim().min(1).max(160),
+    data: z.json().default(null).refine(value => new TextEncoder().encode(JSON.stringify(value)).byteLength <= 32768, 'preparation data must be at most 32 KB'),
+    music: z.object({ type: z.literal('artist'), artistId: z.string().trim().min(1).max(256) }).optional(),
+  }),
+]);
+
+export const preparationOccurrenceSchema = z.object({
+  id: z.string().min(1), showId: z.string().min(1),
+  source: z.enum(['scheduled', 'takeover']),
+  startsAt: z.number().finite(), endsAt: z.number().finite(),
+});
+
+const preparationRecordBase = z.object({
+  occurrence: preparationOccurrenceSchema,
+  skill: z.string(), configuration: z.string(),
+});
+export const preparationRecordSchema = z.discriminatedUnion('kind', [
+  preparationRecordBase.extend({
+    kind: z.literal('failed'), reason: z.string(), attempts: z.number().int(), retryAt: z.number().nullable(),
+  }),
+  preparationRecordBase.extend({
+    kind: z.literal('selected'),
+    result: preparationResultSchema.options[1],
+    attempts: z.number().int(), retryAt: z.number(), reason: z.string().nullable(),
+  }),
+  preparationRecordBase.extend({
+    kind: z.literal('ready'), result: preparationResultSchema.options[1], preparedAt: z.number(),
+  }),
+]);
+export const preparationStoreSchema = z.object({ version: z.literal(1), records: z.array(preparationRecordSchema).max(256) });
+export type PreparationResult = z.output<typeof preparationResultSchema>;
+export type AcceptedPreparation = Extract<PreparationResult, { available: true }>;
+export type PreparationOccurrence = z.output<typeof preparationOccurrenceSchema>;
+export type PreparationRecord = z.output<typeof preparationRecordSchema>;
+
+export const preparationStatusSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('unconfigured') }),
+  z.object({ kind: z.enum(['selected', 'ready', 'failed', 'degraded']), occurrence: preparationOccurrenceSchema,
+    skill: z.string(), subject: z.string().nullable(), reason: z.string().nullable() }),
+]);
+export type PreparationStatus = z.output<typeof preparationStatusSchema>;
+
+export const preparationArtistSchema = z.object({ id: z.string().min(1), name: z.string().min(1), album: z.array(z.object({ id: z.string(), songCount: z.number().optional() })).default([]) });
+export const preparationArtistCreditSchema = z.object({ id: z.string().min(1), name: z.string().optional() });
+export const preparationTrackSchema = z.object({
+  id: z.string().min(1), artistId: z.string().nullable().optional(),
+  artists: z.array(preparationArtistCreditSchema).optional(),
+  albumArtists: z.array(preparationArtistCreditSchema).optional(),
+  title: z.string().default(''), artist: z.string().default(''),
+  album: z.string().nullish().transform(value => value ?? undefined), albumId: z.string().nullish().transform(value => value ?? undefined),
+  duration: z.number().nullable().optional(), durationSec: z.number().nullable().optional(),
+  year: z.number().nullable().optional(),
+}).passthrough();
+export type PreparationTrack = z.output<typeof preparationTrackSchema>;
+
 // ─── from controller/src/schemas/show.ts ─────────────────────────────────
 
 // Shared show schema — run by validateShowsStrict (the update() chokepoint),
@@ -4060,6 +4187,8 @@ function showObjectSchema(ctx: ShowSchemaContext) {
       // show-level opt-in: unscheduled/autonomous programming keeps ducking.
       pauseTalk: showBool(),
       programme: showBool(),
+      speakClock: showBool(),
+      promoteShow: showBool(),
       // Free text, resolved against the live skill catalog at air time.
       segmentSkill: z.preprocess(
         nullToUndefined,
@@ -4069,6 +4198,7 @@ function showObjectSchema(ctx: ShowSchemaContext) {
           .max(SHOW_SEGMENT_SKILL_MAX, `must be ${SHOW_SEGMENT_SKILL_MAX} characters or fewer`)
           .default(''),
       ),
+      preparationSkill: z.preprocess(nullToUndefined, z.string().trim().max(SHOW_SEGMENT_SKILL_MAX).default('')),
       // Empty means "Any": the autonomous dominantMood chain applies on air.
       moods: showStringList({
         max: SHOW_FILTER_VALUES_MAX,
@@ -4198,6 +4328,9 @@ function showObjectSchema(ctx: ShowSchemaContext) {
     })
     // Needs two fields at once, so it cannot live on guestPersonaIds.
     .check((c) => {
+      if (c.value.preparationSkill && c.value.preparationSkill === c.value.segmentSkill) {
+        c.issues.push({ code: 'custom', input: c.value.segmentSkill, path: ['segmentSkill'], message: 'must differ from the show preparation skill' });
+      }
       if (c.value.guestPersonaIds.includes(c.value.personaId)) {
         c.issues.push({
           code: 'custom',
@@ -4304,9 +4437,10 @@ export function repairShowForLoad(
     id: typeof raw.id === 'string' && SHOW_ID_RE.test(raw.id) ? raw.id : undefined,
     name: typeof raw.name === 'string' ? raw.name.trim().slice(0, SHOW_NAME_MAX) : undefined,
     topic: typeof raw.topic === 'string' ? raw.topic.slice(0, SHOW_TOPIC_MAX) : undefined,
-    segmentSkill: typeof raw.segmentSkill === 'string'
+    segmentSkill: typeof raw.segmentSkill === 'string' && raw.segmentSkill.trim() !== (typeof raw.preparationSkill === 'string' ? raw.preparationSkill.trim() : '')
       ? raw.segmentSkill.trim().slice(0, SHOW_SEGMENT_SKILL_MAX)
       : undefined,
+    preparationSkill: typeof raw.preparationSkill === 'string' ? raw.preparationSkill.trim().slice(0, SHOW_SEGMENT_SKILL_MAX) : undefined,
     themeId: typeof raw.themeId === 'string'
       ? raw.themeId.trim().slice(0, SHOW_THEME_ID_MAX)
       : undefined,
@@ -4616,8 +4750,164 @@ const skillCohostsSchema = z.preprocess(
   z.boolean({ error: 'cohosts must be a boolean' }).default(false),
 );
 
+// A skill's own TTS voice override — the same slot shape a persona carries
+// (`{engine, voice, cloudProvider}`), minus inherit/gain/speed: absent means
+// "the on-air DJ's voice", set means this skill always speaks in its own.
+// Engine + provider vocabularies are restated here (not imported from
+// persona.ts) because this module may import only zod — the mirror is one
+// flat file. scripts/skill-voice.test.ts pins them equal to the persona
+// originals, the same posture as the three tag-regex declarations.
+//
+// Why the two lists must match at all: a skill pins the SAME engine vocabulary
+// a persona does, so a skill must never become the one surface where a valid,
+// working engine is unreachable. That is why the pin is a deepEqual rather
+// than a subset check. ADDING AN ENGINE means adding it HERE in the same change —
+// the pin in scripts/skill-voice.test.ts is what makes the omission fail loudly
+// rather than quietly leaving one surface behind.
+// ─────────────────────────────────────────────────────────────────────────
+// `gemini` joins because `TTS_ENGINES` already contains it: a skill pins the
+// same engine vocabulary a persona does, so leaving it off here would make the
+// skill surface the one place a working engine cannot be selected. The comment
+// above says to add an engine HERE in the same change, and the deepEqual in
+// scripts/skill-voice.test.ts is what makes the omission fail loudly — it did,
+// on the rebase that brought this branch level with develop.
+export const SKILL_VOICE_ENGINES = [
+  'piper',
+  'kokoro',
+  'chatterbox',
+  'pocket-tts',
+  'cloud',
+  'remote',
+  'gemini',
+] as const;
+
+export const SKILL_VOICE_PROVIDERS = [
+  'openai',
+  'elevenlabs',
+  'fish-audio',
+  'openai-compatible',
+] as const;
+
+export const SKILL_VOICE_MAX = 100;
+
+// Flat frontmatter keys, so hand edits stay one line each and the loader's
+// flat Record<string, string> needs no new shape.
+export const SKILL_VOICE_ENGINE_KEY = 'voiceEngine';
+export const SKILL_VOICE_ID_KEY = 'voiceId';
+export const SKILL_VOICE_PROVIDER_KEY = 'voiceProvider';
+
+// A voice id that could escape the voice folder: path separators, parent
+// refs, or absolute paths. chatterbox/pocket-tts resolve such values as
+// reference files, so a hand-edited or imported SKILL.md must never smuggle
+// one in through these keys.
+function isUnsafeVoiceId(value: string): boolean {
+  const v = value.trim();
+  return (
+    v.includes('/') ||
+    v.includes('\\') ||
+    v === '..' ||
+    v.startsWith('../') ||
+    v.startsWith('..\\') ||
+    /^[A-Za-z]:/.test(v) ||
+    v.startsWith('/')
+  );
+}
+
+// Lenient read of the three flat keys into a slot, or null when no override.
+// Disk-side twin of skillVoiceSlotSchema below: a hand-edited SKILL.md with a
+// bad engine — or an unsafe voice id — reads as "no override" rather than
+// failing the skill, while the strict schema refuses the same value from the
+// admin form.
+export function normalizeSkillVoice(data: Record<string, unknown> | null | undefined): {
+  engine: string;
+  voice: string;
+  cloudProvider: string;
+} | null {
+  if (!data) return null;
+  const engine = String((data as Record<string, unknown>)[SKILL_VOICE_ENGINE_KEY] ?? '').trim();
+  if (!engine) return null;
+  if (!(SKILL_VOICE_ENGINES as readonly string[]).includes(engine)) return null;
+  let voice = String((data as Record<string, unknown>)[SKILL_VOICE_ID_KEY] ?? '').trim().slice(0, SKILL_VOICE_MAX);
+  if (voice && isUnsafeVoiceId(voice)) return null;
+  const provider = String((data as Record<string, unknown>)[SKILL_VOICE_PROVIDER_KEY] ?? '').trim();
+  const cloudProvider = (SKILL_VOICE_PROVIDERS as readonly string[]).includes(provider) ? provider : 'openai';
+  // Same rule the strict schema applies below, and the same one both persona
+  // paths already carry: a managed cloud provider needs a voice id, and an empty
+  // one is not "use the station default" — it reaches the provider as an empty
+  // `voice`/`reference_id` and the render fails into the rescue chain. The
+  // strict schema DEFAULTS to a valid id so the form round-trips; the disk path
+  // mirrors it rather than returning null, because a hand-written `voiceEngine:
+  // cloud` with no `voiceId` is an incomplete override, not a broken one.
+  //
+  // `openai-compatible` is the exception in both directions: its voices are
+  // server-specific, so empty genuinely means "let the server pick".
+  if (!voice && engine === 'cloud' && cloudProvider !== 'openai-compatible') voice = 'alloy';
+  return { engine, voice, cloudProvider };
+}
+
+// Strict form-side twin: null/undefined reads as "no override" (same as the
+// other optional skill fields); a present block must name a real engine, and
+// per-engine voice rules mirror ttsVoiceSlotSchema in persona.ts. Path-like
+// voice ids are refused outright — see isUnsafeVoiceId.
+const skillVoiceSlotSchema = z
+  .union([z.null(), z.undefined(), z.unknown()])
+  .optional()
+  .transform((raw, ctx) => {
+    if (raw == null) return undefined;
+    if (typeof raw !== 'object' || Array.isArray(raw)) {
+      ctx.issues.push({ code: 'custom', input: raw, message: 'voice must be an object or null' });
+      return z.NEVER;
+    }
+    const t = raw as Record<string, unknown>;
+    const engine = String(t.engine ?? '').trim();
+    if (!(SKILL_VOICE_ENGINES as readonly string[]).includes(engine)) {
+      ctx.issues.push({
+        code: 'custom',
+        input: raw,
+        message: `voice.engine must be one of: ${SKILL_VOICE_ENGINES.join(', ')}`,
+      });
+      return z.NEVER;
+    }
+    const providerRaw = String(t.cloudProvider ?? 'openai').trim() || 'openai';
+    if (!(SKILL_VOICE_PROVIDERS as readonly string[]).includes(providerRaw)) {
+      ctx.issues.push({
+        code: 'custom',
+        input: raw,
+        message: `voice.cloudProvider must be one of: ${SKILL_VOICE_PROVIDERS.join(', ')}`,
+      });
+      return z.NEVER;
+    }
+    let voice = String(t.voice ?? '').trim();
+    const fail = (message: string) => {
+      ctx.issues.push({ code: 'custom', input: raw, message });
+      return z.NEVER;
+    };
+    if (voice.length > SKILL_VOICE_MAX) return fail(`voice.voice must be 0-${SKILL_VOICE_MAX} chars`);
+    if (voice && isUnsafeVoiceId(voice)) {
+      return fail('voice.voice must not be a path — a voice id or filename, never a directory traversal');
+    }
+    if (engine === 'kokoro' && !/^[a-z]{2}_[a-z0-9]+$/.test(voice)) {
+      return fail('voice.voice must match <lang><gender>_<name> for kokoro, e.g. bf_isabella');
+    }
+    if (engine === 'chatterbox' && voice && !/^[A-Za-z0-9_.-]{1,80}\.wav$/.test(voice)) {
+      return fail('voice.voice for chatterbox must be a .wav filename (no path), or empty for the default voice');
+    }
+    if (engine === 'pocket-tts') {
+      if (!voice) voice = 'alba';
+      if (!/^[a-z][a-z0-9_-]{0,39}$/.test(voice) && !/^[A-Za-z0-9_.-]{1,80}\.wav$/.test(voice)) {
+        return fail('voice.voice for pocket-tts must be a built-in voice id (e.g. alba) or a .wav filename');
+      }
+    }
+    if (engine === 'cloud' && providerRaw !== 'openai-compatible' && !voice) voice = 'alloy';
+    if (engine === 'piper' && voice && !/^[A-Za-z0-9_.-]{1,100}\.onnx$/.test(voice) && !/^[a-z]{2}_[a-z0-9]+$/.test(voice)) {
+      return fail('voice.voice for piper must be an .onnx filename (no path), or empty for the default voice');
+    }
+    return { engine, voice, cloudProvider: providerRaw };
+  });
+
 // The fields every skill's SKILL.md carries, built-in or custom.
 export const builtinSkillFileSchema = z.object({
+  voice: skillVoiceSlotSchema,
   label: skillLabelSchema,
   cooldown: skillCooldownSchema,
   cron: skillCronSchema,
@@ -4671,6 +4961,7 @@ export function skillFieldsFrom(kind: string, parsed: SkillFileParsed) {
     requiresKey: parsed.requiresKey,
     tags: parsed.tags,
     brief: parsed.brief,
+    voice: parsed.voice ?? null,
   };
 }
 

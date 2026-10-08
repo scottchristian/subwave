@@ -810,8 +810,6 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
               />
             </div>
 
-<<<<<<< HEAD
-=======
             {/* Voice — optional dedicated TTS voice for this skill. Off means
                 the on-air DJ's voice. Ignored by co-hosted discussions, where
                 each line speaks in its roster persona's own voice. */}
@@ -879,7 +877,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
             </div>
 
             {/* Window — custom skills only (built-in window isn't editable) */}
->>>>>>> 9ddfb986 (feat(skills): per-skill TTS voice override)
+
             {custom && (
               <div className="sw-section">
                 <Controller
