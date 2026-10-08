@@ -23,7 +23,6 @@ import { fetchHeadlines, hashHeadline } from '../../../skills/feed.js';
 import { getArtist, getAlbum, searchArtists } from '../../../music/subsonic.js';
 import { dailyTokensUsed, dailyTtsCharsUsed, lifetimeTokenCount } from '../../log.js';
 import { peakListenersToday } from '../telemetry/budget.js';
-import { getStreamStatus } from '../../../broadcast/listeners.js';
 
 export interface StationServices {
   // Web search via the operator's configured provider (DuckDuckGo / Tavily /

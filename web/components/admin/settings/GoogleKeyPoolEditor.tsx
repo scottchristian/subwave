@@ -19,6 +19,7 @@ import { adminResponse } from '@/lib/admin-query';
 import { Btn } from '../ui';
 import { Input } from '@/components/ui/input';
 import { notify } from '@/lib/notify';
+import { refetchReconciled } from './googlePoolUi';
 
 export interface GooglePoolKey {
   /** Stable opaque identity. Every mutation addresses this, never `index`. */
@@ -64,7 +65,10 @@ export function GoogleKeyPoolEditor({
 }: {
   pool?: GooglePoolState;
   adminFetch: AdminAuth['adminFetch'];
-  onChanged?: () => void;
+  /** Runs after a mutation to reconcile the rows. Its RESULT is inspected, so it
+   *  must return the refetch outcome — a `void` signature would erase the very
+   *  signal `refetchReconciled` exists to read. */
+  onChanged?: () => unknown;
 }) {
   const [adding, setAdding] = useState('');
   const [addingName, setAddingName] = useState('');
@@ -118,8 +122,12 @@ export function GoogleKeyPoolEditor({
       notify.err(e instanceof Error ? e.message : 'Request failed');
     }
     try {
-      await onChanged?.();
-      setDesynced(false);
+      // The refetch's OUTCOME, not merely that it did not throw. React Query's
+      // `refetch` resolves with `{ isError: true }` on failure, so a failed
+      // refresh used to take the success path: `desynced` cleared, every row
+      // control re-enabled against a list the screen no longer matched.
+      const result = await onChanged?.();
+      setDesynced(!refetchReconciled(result));
     } catch {
       setDesynced(true);
     } finally {
@@ -327,10 +335,26 @@ export function GoogleKeyPoolEditor({
             what they can&rsquo;t once their daily quotas run out. Reorder with
             ↑ ↓ if you got the order wrong.
           </p>
+          {/*
+            Terms note. Shown only while the pool is actually in use — two or
+            more keys, or a second one being typed — because a station with a
+            single key has done nothing that needs checking, and a compliance
+            warning nobody has earned is just noise that trains people to ignore
+            the one time it matters.
+
+            It states BOTH things, deliberately. The free-tier case is the one
+            worth naming (rotating free keys around one key's quota is the
+            pattern most likely to warrant a look), and the limitation is stated
+            just as plainly: the station is handed strings and cannot know which
+            are free-tier and which are paid. So the note points at something to
+            check without claiming to know what the operator supplied, and
+            without implying a paid-key pool is exempt — both readings would be
+            false. The call is the operator's.
+          */}
           <p className="mt-2 border-l-2 border-[var(--accent)] pl-2 text-[12px] text-muted">
-            <strong className="text-ink">Check Google&rsquo;s terms before
-            using more than one key.</strong> Rotating several free-tier keys to
-            work around a single key&rsquo;s quota may conflict with the{' '}
+            <strong className="text-ink">You&rsquo;re using this to supply
+            several API keys &mdash; free tier or paid.</strong> If some of them
+            are free-tier keys, you may want to read the{' '}
             <a
               href="https://developers.google.com/terms"
               target="_blank"
@@ -339,9 +363,17 @@ export function GoogleKeyPoolEditor({
             >
               Google APIs Terms of Service
             </a>{' '}
-            or the Gemini free-tier terms, which can change without notice. Read
-            them and decide for yourself whether your use is permitted &mdash;
-            Subwave can&rsquo;t make that call for you.
+            first: rotating several free-tier keys to work around one
+            key&rsquo;s quota is the arrangement most likely to be worth a look,
+            and those terms can change without notice.
+            <br />
+            <br />
+            The station can&rsquo;t tell which kind of key you&rsquo;ve given
+            it &mdash; it sees strings, not billing tiers &mdash; so it is
+            flagging the possibility rather than judging your setup, and it
+            cannot tell you that your arrangement is fine either. Whichever mix
+            you&rsquo;ve used, whether it complies is your call to make and
+            verify.
           </p>
         </>
       )}

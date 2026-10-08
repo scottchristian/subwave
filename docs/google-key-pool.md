@@ -45,6 +45,27 @@ yours. Set this up only if you're satisfied it does. Everything here is a plain
 list of keys the operator supplies; the station does not acquire, generate,
 share or rotate keys on its own.
 
+To be explicit about the scope of that warning, because it is easy to read it as
+a verdict rather than as a prompt to check:
+
+- **If you enter several free-tier keys, you may want to read those terms
+  first.** Rotating free-tier keys around one key's quota is the arrangement
+  most likely to warrant a look, and it is the case the admin note points at.
+- **The station cannot tell which kind of key you gave it.** It is handed
+  strings, not billing tiers, so it does not know whether your pool is
+  free-tier, paid, or a mix. The note in the admin UI therefore raises the
+  possibility rather than checking your actual setup.
+- **Whichever mix you have used, whether it complies is yours to decide and
+  verify.** Several paid keys across projects are no more exempt from your own
+  review than several free ones; SUB/WAVE has no way to enforce those terms and
+  takes no position either way.
+
+So the note is not software policing a policy, and it is not an assurance that
+your particular setup is fine. It exists for one reason: to make you aware that there is
+something worth checking before you wire this into a station you care about. The
+checking is the part only you can do. If you have already done it, this section
+has nothing further to add.
+
 If your use doesn't fit comfortably inside a single key's free tier, the paid
 key on its own — no pool — is the straightforward option, and this whole page
 is irrelevant.
@@ -91,6 +112,12 @@ shape that silently reattaches labels to the wrong credentials the first time a
 key is moved or removed. A Google key can't contain a colon, so the first colon
 is the split point and a name may contain colons of its own. Commas are stripped
 from names when they save, since they separate entries.
+
+**A key itself cannot contain a comma or a colon.** If you paste one that does,
+the add endpoint refuses it with a clear message rather than silently saving it
+as two credentials (comma) or a truncated key that 401s forever (colon). Neither
+can occur in a real Google key — `AIza` plus URL-safe base64 — so nothing
+legitimate is turned away.
 
 The single `GOOGLE_GENERATIVE_AI_API_KEY` is **untouched by this feature**. It is
 not read as a one-key pool: a station that has never set the plural variable
@@ -151,25 +178,22 @@ over.
 
 ## What the pool covers today
 
-**The Gemini LLM leg** — the `google` provider, including its embeddings and the
-model list used by discovery.
+**The Gemini LLM leg — both the primary and the fallback provider.**
 
-**The native Gemini TTS engine** — it resolves its credential from this pool too.
+`googleKeyFetch` is installed on every `google` client the registry builds, and
+it consults one process-wide pool. So a pool is the station's only Google
+credential for **both** legs: a fallback Google key typed in the admin UI while a
+pool exists is stored, reported as saved, and then never read by anything — the
+same as the primary field was before it was guarded. The fallback field is now
+greyed out and says so, exactly like the primary.
 
-That second one is not automatic, and getting it wrong is silent. The TTS engine
-reads its key through `currentKey()` (the pool) before falling back to
-`GOOGLE_GENERATIVE_AI_API_KEY`. Reading only the singular variable breaks on
-exactly the station shape this page describes: because the single-key admin field
-saves to the *pool*, a station configured through that field has no
-`GOOGLE_GENERATIVE_AI_API_KEY` at all, and the engine reports itself unavailable
-while the pool sits there healthy. If you see the `gemini` engine "missing" on a
-pooled station, this is why.
+It also covers **Google embeddings and the model list used by discovery**.
 
-The two read the same credential but are not one mechanism: **only the LLM leg
-rotates on a `429`.** Speech does not — a failed TTS render falls back through the
-normal engine rescue chain instead, which is the designed behaviour for a voice
-that is mid-sentence. So a pool can keep the DJ talking past an exhausted LLM key
-without the speech path failing forward on its own.
+It does **not** yet cover Gemini TTS. The native Gemini TTS engine (#1718) is a
+separate PR, and it will read this same pool when it lands; until then a
+Gemini-TTS station keeps using its own single key. The pool module is already
+shaped for it — nothing about adding that engine's consumer requires a change
+here.
 
 ## Headless / multi-station
 
@@ -192,3 +216,9 @@ one). A station with a single key never sees it: nobody should meet a compliance
 warning for something they haven't done, and it is only actionable at the point
 of adding a second key. This page and `README.md` carry it unconditionally,
 because a doc can be read deliberately rather than stumbled into.
+
+The note says the same thing wherever it appears: it points at something worth
+checking, and the check is yours. That matters in both directions — it is not a
+warning the software raises against you, and it is not an assurance that your
+arrangement is fine. It names the free-tier case because that is the pattern
+worth flagging, and it cannot tell you which kind of key you supplied.

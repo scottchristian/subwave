@@ -348,7 +348,7 @@ ${findingCandidates}${dj.effectsGuidance()}${editorialLeaningsPrompt}`;
 }
 
 // Exported for scripts/llm-bench, like requestSchema above.
-export function requestSystem(persona = session.onAirPersona()) {
+export async function requestSystem(persona = session.onAirPersona()) {
   // Follows requestSchema() above: with the station voice off there IS no
   // "intro" field, and a prompt that keeps talking about one invites the model
   // to stuff the intro into "ack" instead.
@@ -382,7 +382,7 @@ export function requestSystem(persona = session.onAirPersona()) {
       // Import lazily to avoid circular deps at module load time.
       // skillCatalog is populated once skills are loaded, which happens before
       // any request is ever processed.
-      const { skillCatalog } = require('../../skills/_agent.js');
+      const { skillCatalog } = await import('../../skills/_agent.js');
       const catalog: Array<{ kind: string; label?: string; enabled?: boolean }> = skillCatalog() || [];
       const enabledSkills = catalog.filter(c => c.enabled !== false);
       if (enabledSkills.length > 0) {

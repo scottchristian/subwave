@@ -1027,6 +1027,8 @@ export function skillCatalog() {
       // Freeform tags from SKILL.md frontmatter, for the admin list filter.
       tags: c.tags || [],
       cohosts: !!c.cohosts,
+      // The skill's own TTS voice override, or null for the on-air DJ's voice.
+      voice: c.voice || null,
     };
   });
 }

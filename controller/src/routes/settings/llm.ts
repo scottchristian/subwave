@@ -19,7 +19,6 @@ import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { fetchWithTimeout } from '../../util/fetch-timeout.js';
 import { probeFishKey } from '../../llm/speech.js';
-import { openAICompatibleFetch } from '../../llm/internal/provider/registry.js';
 import { currentKeyOrHead, GOOGLE_KEYS_ENV, GOOGLE_KEY_ENV } from '../../util/google-key-pool.js';
 
 // Mounted onto the parent settings router in ../settings.ts.
@@ -327,7 +326,6 @@ router.post('/settings/llm/probe-compat', requireAdmin, async (req, res) => {
       apiKey: resolvedApiKey || 'no-key',
       baseURL: baseUrl.trim().replace(/\/+$/, ''),
       ...(probeHeaders ? { headers: probeHeaders } : {}),
-      fetch: openAICompatibleFetch({}, fetch, true),
     }).chat(model.trim());
     await generateText({
       model: m,

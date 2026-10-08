@@ -6,6 +6,6 @@ export const router = express.Router();
 // The web sign-in form owns the credential prompt. This endpoint deliberately
 // returns a challenge-free 401 so the browser does not replace that form with
 // its native HTTP Basic Auth dialog.
-router.get('/admin-auth', requireAdminUi, (_req, res) => {
+router.get('/api/admin-auth', requireAdminUi, (_req, res) => {
   res.status(204).end();
 });

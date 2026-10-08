@@ -16,6 +16,8 @@ import { Card, Btn, Pill, Seg } from '../ui';
 import { ProviderSelector } from '../llm/ProviderSelector';
 import { ModelCombobox } from '../llm/ModelCombobox';
 import { LLM_ENV_VARS, llmProviderLabel } from '../llm/providerMeta';
+import { GoogleKeyPoolEditor, type GooglePoolState } from './GoogleKeyPoolEditor';
+import { GOOGLE_KEY_VAR, googleKeyFieldInert } from './googlePoolUi';
 import { Advanced } from './section-chrome';
 import {
   SectionHeader, SaveBar, KeyStatus, KeyTestResult, KEY_HINTS,
@@ -157,7 +159,8 @@ export function HeaderRowsEditor({
 
 interface LlmSectionProps extends SectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
-  refresh: () => void;
+  /** Returns the refetch outcome; `void` would erase the signal the pool editor reads. */
+  refresh: () => unknown;
 }
 export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh, fieldErrors }: LlmSectionProps) {
   const [resetCompatKey, setResetCompatKey] = useState(false);
@@ -254,8 +257,21 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
     adminFetch,
   });
 
+  // A configured pool is the ONLY source of Google credentials — the controller
+  // reads the singular variable solely as a one-key fallback. Leaving that field
+  // editable would let an operator save a replacement key that is accepted,
+  // reported as saved, and then never read by anything.
+  const googlePoolCount =
+    (data.env?.GOOGLE_KEY_POOL as GooglePoolState | undefined)?.count ?? 0;
+
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
+    // Google saves to the LEGACY singular variable, and the pool is a separate
+    // thing that takes precedence while it exists. That is what makes "one key"
+    // and "a pool" two states rather than one: if this field wrote the pool,
+    // removing every key and then typing one here would re-activate the pool and
+    // disable the very field being typed into, so a single key could never be
+    // configured at all.
     try {
       const r = await adminResponse(adminFetch, '/settings/secrets', {
         method: 'POST',
@@ -350,11 +366,6 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
       llm: {
         provider: activeProvider,
         model: form.llm.model,
-        modelOverrides: Object.fromEntries(
-          Object.entries(form.llm.modelOverrides || {})
-            .map(([k, v]) => [k, (v || '').trim()] as const)
-            .filter(([, v]) => v),
-        ),
         ollamaUrl: form.llm.ollamaUrl,
         numCtx: form.llm.numCtx,
         repeatPenalty: form.llm.repeatPenalty,
@@ -530,9 +541,6 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 <Btn onClick={() => { setCompatKeyInput(''); setResetCompatKey(true); setForm(f => ({ ...f, llm: { ...f.llm, compatibleMode: 'hosted', headers: [], providerBaseUrls: { ...f.llm.providerBaseUrls, 'openai-compatible': '' } } })); }}>
                   Use Azure OpenAI v1
                 </Btn>
-                <Btn onClick={() => { setCompatKeyInput(''); setResetCompatKey(true); setForm(f => ({ ...f, llm: { ...f.llm, compatibleMode: 'hosted', headers: [], providerBaseUrls: { ...f.llm.providerBaseUrls, 'openai-compatible': 'https://api.mistral.ai/v1' } } })); }}>
-                  Use Mistral
-                </Btn>
               </div>
               <Input
                 value={form.llm.providerBaseUrls['openai-compatible'] ?? ''}
@@ -547,9 +555,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 <code> https://YOUR-RESOURCE.openai.azure.com/openai/v1</code>,
                 then add an <code>api-key</code> custom header below and enter the
                 deployment name as the model. The Atlas preset fills its URL;
-                enter your key in the Bearer token field. The Mistral preset
-                fills <code>https://api.mistral.ai/v1</code>; enter your Mistral
-                API key in the Bearer token field. The URL must be
+                enter your key in the Bearer token field. The URL must be
                 reachable from the controller container. A preset clears the
                 previous custom headers and saved compatible-provider Bearer
                 token on Save; primary and backup share that token.
@@ -690,35 +696,67 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
 
           {LLM_ENV_VARS[form.llm.provider] && (() => {
             const keyVar = LLM_ENV_VARS[form.llm.provider]!;
+            const isGoogle = keyVar === GOOGLE_KEY_VAR;
+            // A configured pool IS the Google credential, so the single-key
+            // field is shown but inert while one exists. Visible-and-disabled
+            // rather than hidden: an operator who cannot see the field cannot
+            // tell whether their key was replaced or is merely parked, and the
+            // obvious question ("where did my single key go?") deserves an
+            // answer on screen instead of in a doc.
+            //
+            // `googleKeyFieldInert`, not a second copy of this condition: the
+            // fallback leg's identical field was left unguarded for exactly that
+            // reason, and two copies of one rule is how they drift.
+            const poolActive = googleKeyFieldInert(keyVar, googlePoolCount);
             return (
               <>
                 <div className="field">
-                  <Label>{llmProviderLabel(form.llm.provider)} API key</Label>
+                  <Label>{`${llmProviderLabel(form.llm.provider)} API key`}</Label>
+
                   <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
                     <Input
                       type="password"
                       autoComplete="off"
                       value={primaryKeyInput}
-                      placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
+                      disabled={poolActive}
+                      placeholder={poolActive || data.env?.[keyVar] ? '……… (on file)' : (KEY_HINTS[keyVar] ?? '')}
                       onChange={(e: ChangeEvent<HTMLInputElement>) => setPrimaryKeyInput(e.target.value)}
-                      className="max-w-[360px]"
+                      className="max-w-[360px] disabled:cursor-not-allowed disabled:opacity-50"
                     />
                     <Btn
                       onClick={() => testKey(keyVar, primaryKeyInput, setPrimaryKeyTesting, setPrimaryKeyTest, () => setPrimaryKeyInput(''))}
-                      disabled={primaryKeyTesting || (!primaryKeyInput.trim() && !data.env?.[keyVar])}
+                      disabled={poolActive || primaryKeyTesting || (!primaryKeyInput.trim() && !data.env?.[keyVar])}
                     >
                       {primaryKeyTesting ? 'Testing…' : 'Test key'}
                     </Btn>
                   </div>
                   <div className="field-hint">
                     Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
+                    {poolActive && (
+                      <>
+                        {' '}
+                        <strong className="text-ink">Not used while a key pool is set up below</strong> — the pool is what the
+                        station calls Google with, and this key is ignored. Remove the pool to go back to a single key.
+                      </>
+                    )}
                   </div>
-                  {keyVar === 'OPENAI_API_KEY' && (
-                    <div className="field-hint">
-                      This key is shared across LLM and Cloud TTS.
-                    </div>
-                  )}
                 </div>
+
+                {keyVar === 'OPENAI_API_KEY' && (
+                  <div className="field-hint">
+                    This key is shared across LLM and Cloud TTS.
+                  </div>
+                )}
+                {/* The pool editor sits BELOW the single-key field rather than
+                    replacing it, so the operator can see both and is told
+                    plainly which one is live. */}
+                {isGoogle && (
+                  <GoogleKeyPoolEditor
+                    pool={data.env?.GOOGLE_KEY_POOL as GooglePoolState | undefined}
+                    adminFetch={adminFetch}
+                    onChanged={refresh}
+                  />
+                )}
                 {primaryKeyTest && <KeyTestResult result={primaryKeyTest} />}
               </>
             );
@@ -803,9 +841,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 (notably Intel/XPU builds) mishandle the guided-decoding backend
                 that <code>required</code> engages, while <code>auto</code> never
                 does. On <code>Auto</code> a capable model still calls the tool;
-                misses fall back to the stateless picker. Claude Sonnet 5.5,
-                Opus 5.5 and Fable 5 refuse forced tool calls, so they always
-                run on <code>Auto</code> whatever this is set to.
+                misses fall back to the stateless picker.
               </div>
             </div>
           )}
@@ -1055,6 +1091,13 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
 
               {LLM_ENV_VARS[form.llm.fallback.provider] && (() => {
                 const keyVar = LLM_ENV_VARS[form.llm.fallback.provider]!;
+                // The SAME predicate the primary field uses, because the pool is
+                // equally this leg's only credential: googleKeyFetch is installed
+                // on every `google` client the registry builds and consults one
+                // process-wide pool. So a fallback Google key typed here was
+                // stored, reported as saved, and never read — while its twin in the
+                // primary card was greyed out saying exactly that.
+                const poolActive = googleKeyFieldInert(keyVar, googlePoolCount);
                 return (
                   <>
                     <div className="field">
@@ -1064,19 +1107,28 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                           type="password"
                           autoComplete="off"
                           value={fallbackKeyInput}
-                          placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
+                          disabled={poolActive}
+                          placeholder={poolActive || data.env?.[keyVar] ? '……… (on file)' : (KEY_HINTS[keyVar] ?? '')}
                           onChange={(e: ChangeEvent<HTMLInputElement>) => setFallbackKeyInput(e.target.value)}
-                          className="max-w-[360px]"
+                          className="max-w-[360px] disabled:cursor-not-allowed disabled:opacity-50"
                         />
                         <Btn
                           onClick={() => testKey(keyVar, fallbackKeyInput, setFallbackKeyTesting, setFallbackKeyTest, () => setFallbackKeyInput(''))}
-                          disabled={fallbackKeyTesting || (!fallbackKeyInput.trim() && !data.env?.[keyVar])}
+                          disabled={poolActive || fallbackKeyTesting || (!fallbackKeyInput.trim() && !data.env?.[keyVar])}
                         >
                           {fallbackKeyTesting ? 'Testing…' : 'Test key'}
                         </Btn>
                       </div>
                       <div className="field-hint">
                         Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
+                        {poolActive && (
+                          <>
+                            {' '}
+                            <strong className="text-ink">Not used while a key pool is set up</strong> — the pool is what the station
+                            calls Google with, on this leg as well as the primary, so this key is ignored. Remove the pool from the
+                            primary card above to go back to a single key.
+                          </>
+                        )}
                       </div>
                     </div>
                     {fallbackKeyTest && <KeyTestResult result={fallbackKeyTest} />}
@@ -1541,53 +1593,6 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
       </Card>
       </Advanced>
 
-      <Card title="Task Model Overrides" sub="route specific agent tasks to a different model">
-        <div className="grid gap-[18px]">
-          <div className="field-hint">
-            The tasks below default to using the primary model. To route a heavy task to a larger
-            model while keeping the station running on a smaller, faster model, select an override
-            below. Overrides apply to the <strong>primary provider</strong> only — leave blank for the primary model.
-          </div>
-          {[
-            { id: 'generateBanter', label: 'Presenter Banter', desc: 'Multi-speaker conversation between personas' },
-            { id: 'djAgentSegment', label: 'Script Generation', desc: 'Single-speaker scripts for news, weather, deep-cuts — agent and pool modes alike' },
-            { id: 'djAgentPick', label: 'Track Selection', desc: 'The AI DJ picking the next track' },
-            { id: 'djAgentRequest', label: 'Listener Requests', desc: 'Negotiation and fulfillment of track requests' },
-            { id: 'matchRequest', label: 'Request Matcher', desc: 'Matching request text against the library' },
-            { id: 'identifyRequest', label: 'Search Identifier', desc: 'Web search to identify a vague request' },
-          ].map(task => (
-            <div className="field" key={task.id}>
-              <Label>{task.label}</Label>
-              <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
-                {primaryDiscovery.models.length > 0 ? (
-                  <ModelCombobox
-                    models={primaryDiscovery.models}
-                    value={form.llm.modelOverrides?.[task.id] || ''}
-                    onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, modelOverrides: { ...(f.llm.modelOverrides || {}), [task.id]: v } } }))}
-                    placeholder="Use primary model"
-                  />
-                ) : (
-                  <Input
-                    value={form.llm.modelOverrides?.[task.id] || ''}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                      setForm(f => ({ ...f, llm: { ...f.llm, modelOverrides: { ...(f.llm.modelOverrides || {}), [task.id]: e.target.value } } }))
-                    }
-                    placeholder="Use primary model (or type model ID)"
-                    className="max-w-[360px]"
-                  />
-                )}
-                {!!form.llm.modelOverrides?.[task.id] && (
-                  <Btn sm onClick={() => setForm(f => ({ ...f, llm: { ...f.llm, modelOverrides: { ...(f.llm.modelOverrides || {}), [task.id]: '' } } }))}>
-                    Clear
-                  </Btn>
-                )}
-              </div>
-              <div className="field-hint">{task.desc}</div>
-            </div>
-          ))}
-        </div>
-      </Card>
-
       <SaveBar
         note={`Active model: ${data.llm?.active}. Applies to the next LLM call, no restart needed.`}
         busy={busy}
@@ -1605,6 +1610,8 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         )}
       />
 
+      {/* The SAFE outcome (keep the embedding pin) is the default; only the explicit
+          confirm re-embeds on the new provider. */}
       <V3AlertDialog
         open={embedPinNotice != null}
         onOpenChange={(o) => { if (!o) setEmbedPinNotice(null); }}

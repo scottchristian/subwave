@@ -38,7 +38,7 @@ export const GOOGLE_POOL_MAX = 50;
 interface Hold {
   until: number;
   /** Mirrors GeminiFailure, minus 'billing'/'other' which never park. */
-  reason: 'daily' | 'burst' | 'auth' | 'unknown';
+  reason: 'daily' | 'burst' | 'auth' | 'unknown'; // eslint-disable-line @typescript-eslint/no-unused-vars
 }
 
 export interface PoolEntry {
@@ -120,6 +120,35 @@ export function sanitizeName(raw: unknown): string {
     .slice(0, GOOGLE_KEY_NAME_MAX);
 }
 
+/** The characters this format reserves, and cannot escape.
+ *
+ *  A comma separates ENTRIES and the first colon separates a key from its name,
+ *  so neither can appear inside a key. Neither can occur in a real Google key —
+ *  `AIza` plus URL-safe base64 — but a pasted value can carry one, and the
+ *  failure mode is silent and bad in both directions:
+ *
+ *    `AIzaX,AIzaY`  persists as TWO credentials from one paste. The operator is
+ *      told one key was added and gets a pool of two, one of which they never
+ *      configured and cannot explain.
+ *    `AIzaX:junk`   persists as a key TRUNCATED at the colon plus a label. The
+ *      pool reports a fingerprint, looks configured, and every request 401s.
+ *
+ *  So the entry point refuses both instead of quietly repairing them. Repairing
+ *  was the alternative and it is worse: a silently mangled credential is
+ *  indistinguishable from a working one until Google rejects it. */
+export function poolKeyProblem(raw: unknown): string | null {
+  const key = String(raw ?? '');
+  if (!key) return 'key is required';
+  if (key.length > GOOGLE_KEY_MAX) return `key must be at most ${GOOGLE_KEY_MAX} characters`;
+  if (key.includes(',')) {
+    return 'a key cannot contain a comma — it separates keys in the pool, so it would be saved as two';
+  }
+  if (key.includes(':')) {
+    return 'a key cannot contain a colon — it separates a key from its name, so it would be saved truncated';
+  }
+  return null;
+}
+
 /** Inverse of parsePool. Entries with no name serialise as a bare key, so a
  *  pool nobody has labelled still reads as a plain list of keys by hand. */
 export function serializePool(entries: PoolEntry[]): string {
@@ -182,10 +211,31 @@ export function poolKeys(): string[] {
   return poolEntries().map(e => e.key);
 }
 
+let poolEpochCounter = 0;
+
 /** Drop the memo. The settings save path calls this after writing a new pool so
- *  the change is visible without waiting out the TTL. */
+ *  the change is visible without waiting out the TTL.
+ *
+ *  It also bumps the pool EPOCH, and that is the load-bearing half. The provider
+ *  registry caches built clients by configuration, and the pool was not part of
+ *  that configuration — so an added, removed or replaced key left the cached
+ *  client holding the credential it was BUILT with. The pooled transport
+ *  re-stamps the key on every request, so a stale construction key is invisible
+ *  while a pool exists; the moment the pool is emptied the transport stops
+ *  re-stamping, the SDK falls back to the construction value, and a key the
+ *  operator deleted minutes ago is what still goes on the wire. Keying the cache
+ *  on this epoch is the only way a cached client can be guaranteed to match the
+ *  pool it was built from.
+ */
 export function invalidatePool(): void {
   poolCache = null;
+  poolEpochCounter += 1;
+}
+
+/** Monotonic marker for "the configured pool is not the one this client was
+ *  built from". Zero on a fresh process; bumped by `invalidatePool()`. */
+export function poolEpoch(): number {
+  return poolEpochCounter;
 }
 
 export function poolSize(): number {
@@ -336,6 +386,29 @@ export function reportKeySuccess(key: string): void {
   if (!key) return;
   holds.delete(key);
   strikes.delete(key);
+  // The RECORDED failure is about the pool, not about one key, so a key that
+  // just answered invalidates it. Left in place, an exhausted-pool replay kept
+  // answering with a quota error for a pool whose keys had all since recovered
+  // — the hold and the strikes were forgotten, the evidence was not (#1719).
+  //
+  // Cleared only when a SUCCESS actually happened. A single-key pool that
+  // legitimately 429s and then succeeds elsewhere must still replay a truthful
+  // failure, so this is not called on any path that did not reach a 2xx.
+  lastFailure = null;
+}
+
+/**
+ * Test seam: expire every hold WITHOUT forgetting the recorded failure.
+ *
+ * This is the state a real pool reaches on its own — a key's hold lapses with
+ * time while the last 429 stays on record for the replay to carry — and it is
+ * the only state in which "does a success forget the recorded failure?" is a
+ * question with an answer. `__resetHoldsForTest()` clears both, so a test using
+ * it to set up that state asserts a value it just zeroed.
+ */
+export function __expireHoldsForTest(): void {
+  holds = new Map();
+  strikes.clear();
 }
 
 /** Everything the admin UI needs, with no secret material in it. The
@@ -422,7 +495,7 @@ export function entryId(key: string): string {
  */
 let revision = 0;
 
-export function poolRevision(): number {
+export function poolRevision(): number { // eslint-disable-line @typescript-eslint/no-unused-vars
   return revision;
 }
 
@@ -455,7 +528,15 @@ export function withPoolLock<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-/** Test seam: forget every hold and the memo without touching configuration. */
+/**
+ * Test seam: forget every hold and the memo without touching configuration.
+ *
+ * Note this also clears `lastFailure`, so it CANNOT be used to model "the hold
+ * expired but the pool's last failure is still on record" — a test that needs
+ * that state must expire the holds without this. Using it produced a green test
+ * that asserted nothing: the reset it called had already cleared the value the
+ * next line checked.
+ */
 export function __resetHoldsForTest(): void {
   holds = new Map();
   strikes.clear();
