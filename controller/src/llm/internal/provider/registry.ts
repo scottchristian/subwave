@@ -44,6 +44,32 @@ export function debugFetch(url: any, init: any) {
   return fetch(url, init);
 }
 
+// The `apiKey` to hand `createGoogleGenerativeAI` at CONSTRUCTION time.
+//
+// This exists because the SDK resolves a missing `apiKey` from the environment
+// variable `GOOGLE_GENERATIVE_AI_API_KEY` and throws `LoadAPIKeyError` if that
+// is also unset -- it never looks at the pool. Passing `apiKey` only when
+// `cfg.apiKey` was set therefore broke the exact configuration the feature is
+// for: a pool-only station (no singular variable at all) failed every chat
+// generation and every embedding with ZERO fetch calls, so the pooled
+// transport never ran. googleKeyFetch re-stamps the real per-request key on
+// every call, so the value given here is only what the constructor requires --
+// but it must be a real configured credential, not a placeholder, because a
+// placeholder would be sent as the key whenever the pool has nothing live.
+import { GOOGLE_KEY_ENV, currentKey, currentKeyOrHead } from '../../../util/google-key-pool.js';
+
+export function googleApiKeyForSdk(cfg: any): string | undefined {
+  return cfg.apiKey || currentKey() || currentKeyOrHead() || process.env[GOOGLE_KEY_ENV] || undefined;
+}
+
+// The Google transport, and where key rotation happens.
+import { poolConfigured, googleKeyFetch as _googleKeyFetch } from '../../../util/google-key-pool.js';
+
+export async function googleKeyFetch(url: any, init?: any): Promise<Response> {
+  if (!poolConfigured()) return debugFetch(url, init);
+  return _googleKeyFetch(url, init, new Set());
+}
+
 // llama.cpp / vLLM / LM Studio honour chat_template_kwargs.enable_thinking=false;
 // the AI SDK's openai provider has no field for it, so it is injected into the
 // body. `baseFetch` is the transport to delegate to once rewritten — debugFetch

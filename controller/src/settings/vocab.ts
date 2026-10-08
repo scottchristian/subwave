@@ -65,7 +65,6 @@ import {
   SETTINGS_SEARCH_PROVIDERS,
 } from '../schemas/settings.js';
 
-export { normalizeGeminiSafety } from '../schemas/settings.js';
 
 // Placeholders are substituted by renderDjPrompt(). {name} is mandatory:
 // update() refuses any custom template that drops it.
@@ -828,8 +827,6 @@ export const POCKET_TTS_VOICE_RE = TTS_POCKET_VOICE_RE;
 export const CHATTERBOX_VOICE_RE = TTS_CHATTERBOX_VOICE_RE;
 // Gemini's model + voice vocabularies, re-exported under the plain names the
 // rest of the controller imports, mirroring TTS_CLOUD_PROVIDERS above.
-export const GEMINI_TTS_MODELS: readonly string[] = GEMINI_TTS_MODEL_VALUES;
-export const GEMINI_TTS_VOICES: readonly string[] = GEMINI_TTS_VOICE_VALUES;
 // The entity-id pattern shows, personas and skill assignments share. Defined
 // once as SHOW_ID_RE in the shared show schema: a mirrored module may import
 // only 'zod', so it is homed in the first feature that needed it.
