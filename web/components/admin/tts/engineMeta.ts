@@ -73,21 +73,6 @@ export function isInheritEngine(engine: string): boolean {
 // the pair of helpers below: which engine card lights up, and which provider is
 // chosen. They are always written together and never read apart, which is what
 // keeps this a presentation choice rather than a second source of truth.
-export const GEMINI_CLOUD_PROVIDER = 'gemini';
-
-/** The engine card a given engine id belongs under. */
-export function engineCategory(engine: string): string {
-  return engine === GEMINI_CLOUD_PROVIDER ? 'cloud' : engine;
-}
-
-/**
- * The engine id a cloud-provider selection means. Gemini keeps its own id so the
- * dispatcher and every stored persona/skill value are untouched; everything else
- * is the shared `cloud` engine.
- */
-export function engineForCloudProvider(provider: string): string {
-  return provider === GEMINI_CLOUD_PROVIDER ? GEMINI_CLOUD_PROVIDER : 'cloud';
-}
 
 export const ENGINE_META: Record<string, EngineMeta> = Object.fromEntries(
   [INHERIT_ENGINE, ...ENGINES].map(e => [e.id, e]),

@@ -88,7 +88,6 @@ export interface TtsForm {
   // and never sent to the engine — see the Gemini panel's hint.
   gemini: { model: string; voice: string; pronunciation: string; libraryLanguage: string };
   cloud: CloudTtsCfg;
-  gemini: { model: string; voice: string };
   remote: { url: string };
   // Keyed by engine id (note the hyphen in `pocket-tts`). Always carries all 6
   // known engines; 0 = unity.
@@ -169,15 +168,7 @@ export interface LlmForm {
   maxOutputTokens: number;
   banterPrompt: string;
   listenerPrompt: string;
-  geminiSafety: {
-    harassment: boolean;
-    hateSpeech: boolean;
-    sexuallyExplicit: boolean;
-    dangerousContent: boolean;
-  };
-  // 0 = auto (follow the provider capability table); 1-5 overrides it.
   discoverySteps: number;
-  // HARM_CATEGORY thresholds for the native `google` leg. Checked = block.
   geminiSafety: GeminiSafety;
   fallback: LlmFallbackForm;
 }
@@ -501,7 +492,6 @@ export interface SettingsData {
       // The saved shape also carries the redacted key sentinels ('set' when a
       // key is on file, '' otherwise) — GET /settings never returns raw keys.
       cloud?: Partial<CloudTtsCfg> & { apiKey?: string; compatApiKey?: string };
-      gemini?: { model?: string; voice?: string };
       remote?: { url?: string };
       gainDb?: Record<string, number>;
       speed?: Record<string, number>;
