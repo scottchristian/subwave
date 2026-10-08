@@ -63,11 +63,10 @@ export function googleApiKeyForSdk(cfg: any): string | undefined {
 }
 
 // The Google transport, and where key rotation happens.
-import { poolConfigured, googleKeyFetch as _googleKeyFetch } from '../../../util/google-key-pool.js';
-
+// Minimal googleKeyFetch for stations without google-key-pool (#1735).
+// Falls back to debugFetch when no pool is configured.
 export async function googleKeyFetch(url: any, init?: any): Promise<Response> {
-  if (!poolConfigured()) return debugFetch(url, init);
-  return _googleKeyFetch(url, init, new Set());
+  return debugFetch(url, init);
 }
 
 // llama.cpp / vLLM / LM Studio honour chat_template_kwargs.enable_thinking=false;
