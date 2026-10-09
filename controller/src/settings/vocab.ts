@@ -41,8 +41,6 @@ import {
   TTS_GAIN_CLAMP_DB as TTS_GAIN_CLAMP_DB_VALUE,
   TTS_KOKORO_VOICE_RE,
   TTS_POCKET_VOICE_RE,
-  GEMINI_TTS_MODELS as GEMINI_TTS_MODEL_VALUES,
-  GEMINI_TTS_VOICES as GEMINI_TTS_VOICE_VALUES,
   TTS_SPEED_DEFAULT as TTS_SPEED_DEFAULT_VALUE,
   TTS_SPEED_MAX as TTS_SPEED_MAX_VALUE,
   TTS_SPEED_MIN as TTS_SPEED_MIN_VALUE,
@@ -530,25 +528,6 @@ export function normalizeLlmHeaders(raw: unknown): Record<string, string> {
   }
   return out;
 }
-
-// HARM_CATEGORY thresholds for the native `google` leg. Lenient load posture
-// like the rest of this file: booleans only, anything else reads as allow
-// (unchecked), so a hand-edited settings.json can't wedge boot.
-export function normalizeGeminiSafety(raw: unknown): {
-  harassment: boolean;
-  hateSpeech: boolean;
-  sexuallyExplicit: boolean;
-  dangerousContent: boolean;
-} {
-  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  return {
-    harassment: r.harassment === true,
-    hateSpeech: r.hateSpeech === true,
-    sexuallyExplicit: r.sexuallyExplicit === true,
-    dangerousContent: r.dangerousContent === true,
-  };
-}
-
 // Build the per-provider inline-key map from a stored settings.llm blob and
 // migrate the two legacy single slots. Those were only ever written by the
 // openai-compatible / locca path, so a value found under a different provider is

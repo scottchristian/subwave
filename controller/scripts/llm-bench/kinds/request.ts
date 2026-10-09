@@ -26,7 +26,7 @@ function agentScenario(name: string, requestText: string, check: (out: any) => s
     run: async () => {
       const { tools, seen } = pickerToolsSynthetic();
       const result = await djAgent({
-        system: requestSystem(),
+        system: await requestSystem(),
         messages: requestMessages(requestText),
         tools,
         schema: requestSchema(),

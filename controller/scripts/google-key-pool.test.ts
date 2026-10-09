@@ -15,19 +15,22 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 process.env.STATE_DIR ??= mkdtempSync(join(tmpdir(), 'google-pool-'));
 
 import {
+  __expireHoldsForTest,
   __resetHoldsForTest,
   allKeysHeld,
   currentKey,
   fingerprint,
   getLastFailure,
   holdRemainingMs,
+  GOOGLE_KEY_MAX,
+  poolKeyProblem,
   invalidatePool,
   parsePool,
   sanitizeName,
@@ -38,7 +41,6 @@ import {
   recordLastFailure,
   poolEntries,
   poolKeys,
-  poolRevision,
   poolSize,
   poolStatus,
   reportKeyFailure,
@@ -404,7 +406,7 @@ test('an exhausted pool surfaces the 429 instead of looping', async () => {
     assert.equal(res.status, 429, 'the 429 must reach the caller so failover can escalate');
     assert.equal(calls, 1, 'must not re-issue against the same spent key');
     // The body survives the read, which is what lets withFailover classify it.
-    const body = await res.json();
+    const body = (await res.json()) as any;
     assert.match(body.error.message, /retry in 20s/);
   } finally {
     globalThis.fetch = realFetch;
@@ -537,6 +539,44 @@ test('an exhausted pool costs exactly ONE attempt per key, never a second pass',
     assert.equal(res.status, 429);
     assert.equal(seen.length, 3, `one attempt per key, got ${seen.length} for a 3-key pool`);
     assert.deepEqual(seen, [K1, K2, K3], 'each key tried exactly once, in order');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('a hold SHORTER than the request still costs one attempt per key', async () => {
+  // The review round's finding #2, which the test above cannot see: that one
+  // uses a 20s hint, so every failed key is still parked when the next one is
+  // selected and the shared holds bound the loop on their own. Make the hold
+  // 10ms and the request 20ms and the hold is EXPIRED before the next
+  // selection — so the request-local attempted set is the only thing left that
+  // can end the recursion. Handing the recursion a fresh set here does not
+  // produce a failing assertion, it produces an unbounded loop that hangs the
+  // runner, which is why this case needs its own test rather than a wider
+  // assertion on the one above.
+  setPool(K1, K2);
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  const seen: string[] = [];
+  // The stub REFUSES a third attempt rather than letting the recursion run.
+  // An unbounded loop does not fail a test, it hangs the runner until the whole
+  // suite is killed — which reads as "the pool broke" and proves nothing about
+  // which assertion was supposed to catch it. Throwing here converts the exact
+  // regression into a reported failure at the call site.
+  const POOL_SIZE = 2;
+  globalThis.fetch = (async (_u: any, init: any) => {
+    seen.push(new Headers(init?.headers || {}).get('x-goog-api-key') || '');
+    if (seen.length > POOL_SIZE) {
+      throw new Error(`rotation was not bounded: ${seen.length} attempts for a ${POOL_SIZE}-key pool`);
+    }
+    await new Promise(r => setTimeout(r, 20));   // slower than the hold below
+    return new Response(JSON.stringify({ error: { message: 'Please retry in 0.01s.' } }), { status: 429 });
+  }) as typeof fetch;
+  try {
+    const res = await googleKeyFetch('https://example.test/v1/x', {});
+    assert.equal(res.status, 429);
+    assert.equal(seen.length, 2, `one attempt per key, got ${seen.length} for a 2-key pool`);
+    assert.deepEqual(seen, [K1, K2], 'an expired hold must not hand the failed key back');
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -758,7 +798,7 @@ test('an exhausted pool short-circuits WITHOUT a request, and replays the real b
     assert.equal(call, learned, 'no further network I/O once the pool is spent');
     assert.deepEqual(seen, [K1, K2], 'only one attempt per key, ever');
     // And the replayed body is the provider's own, so the reason survives.
-    const body = await (await googleKeyFetch('https://example.test/v1/x', {})).json();
+    const body = (await (await googleKeyFetch('https://example.test/v1/x', {})).json()) as any;
     assert.equal(body.error.code, 'quota_exceeded');
   } finally {
     globalThis.fetch = realFetch;
@@ -779,8 +819,47 @@ test('a successful call clears the recorded failure it would otherwise replay', 
     // K1's hold is still set from the first call, so the replay path is not
     // reachable — but the failure record must not outlive a working key either.
     assert.equal(getLastFailure()?.status ?? 429, 429);
-    reportKeySuccess(K1);
     assert.equal((await googleKeyFetch('https://example.test/v1/x', {})).status, 200);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+// The version above called `reportKeySuccess(K1)` by hand, which made it a test
+// of the HELPER rather than of the transport: deleting the transport's own call
+// left it green, while a station whose keys had all recovered kept replaying a
+// quota error from a pool with nothing wrong with it. Driven through
+// `googleKeyFetch` so the assertion can only pass if the reset happens where a
+// real request succeeded.
+test('the transport itself forgets a recovered pool — no helper called by hand', async () => {
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  try {
+    // 1. A single-key pool 429s: the failure is recorded and the key parked.
+    setPool(K1);
+    globalThis.fetch = (async () => new Response(
+      code('quota_exceeded'), { status: 429, headers: { 'retry-after': '3600' } },
+    )) as unknown as typeof fetch;
+    const exhausted = await googleKeyFetch('https://example.test/v1/x', {});
+    assert.equal(exhausted.status, 429);
+    assert.ok(getLastFailure(), 'the failure must be recorded for the replay to carry');
+
+    // 2. The hold expires and the SAME key answers 200. The transport's success
+    //    path is the only thing that may clear the recorded failure.
+    __expireHoldsForTest();
+    globalThis.fetch = (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch;
+    assert.equal((await googleKeyFetch('https://example.test/v1/x', {})).status, 200);
+    assert.equal(getLastFailure(), null,
+      'a pool whose key just answered must not still be replaying a quota failure — that '
+        + 'is what turned a recovered pool into a station that stays silent');
+
+    // 3. And the replay path is genuinely unreachable now, rather than merely
+    //    unexercised: a fresh pool that DOES fail still records truthfully.
+    setPool(K2);
+    globalThis.fetch = (async () => new Response(code('quota_exceeded'), { status: 429 })) as unknown as typeof fetch;
+    await googleKeyFetch('https://example.test/v1/x', {});
+    assert.equal(getLastFailure()?.status, 429,
+      'clearing on success must not clear on the next failure');
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -1023,7 +1102,7 @@ test('the single-key field is greyed out while a pool exists, and says so', asyn
   assert.doesNotMatch(llmSection, /'GOOGLE_GENERATIVE_AI_API_KEYS'/,
     'the single field must not write the pool variable');
 
-  assert.match(llmSection, /const poolActive = isGoogle && googlePoolCount > 0/,
+  assert.match(llmSection, /const poolActive = googleKeyFieldInert\(keyVar, googlePoolCount\)/,
     'pool presence must drive the disabled state');
   assert.match(llmSection, /disabled=\{poolActive\}/,
     'the single-key input must be disabled while a pool exists');
@@ -1044,7 +1123,7 @@ test('the single-key field is greyed out while a pool exists, and says so', asyn
   assert.match(routes, /case GOOGLE_KEYS_ENV:\s*\n\s*case GOOGLE_KEY_ENV:/,
     'the pool variable must reach the Google probe branch');
 
-  const core = fs.readFileSync(new URL('../src/routes/settings/core.ts', import.meta.url), 'utf8');
+  const core = readFileSync(new URL('../src/routes/settings/core.ts', import.meta.url), 'utf8');
   assert.match(core, /GOOGLE_GENERATIVE_AI_API_KEY: !!process\.env\.GOOGLE_GENERATIVE_AI_API_KEY \|\| poolConfigured\(\)/,
     'a pool-only station must still report a Google key on file, or Test stays disabled');
 });
@@ -1056,7 +1135,12 @@ test('the single-key field is greyed out while a pool exists, and says so', asyn
 
 test('concurrent pool writers do not lose each other\'s additions', async () => {
   const stateRoot = mkdtempSync(join(tmpdir(), 'google-pool-race-'));
-  const { saveSecrets: realSave } = await import('../src/setup/secrets.js');
+  // saveSecretsWithinLock, NOT saveSecrets: this handler already holds the pool
+  // lock, and `saveSecrets` takes it itself. Calling the locked variant from
+  // inside the lock deadlocks the single chain against itself — which is exactly
+  // why the unlocked variant is exported and named for its precondition rather
+  // than left as an internal detail.
+  const { saveSecretsWithinLock: realSave } = await import('../src/setup/secrets.js');
   const { poolEntries: entriesOf } = await import('../src/util/google-key-pool.js');
   const { withPoolLock: lock } = await import('../src/util/google-key-pool.js');
 
@@ -1083,6 +1167,36 @@ test('concurrent pool writers do not lose each other\'s additions', async () => 
     assert.ok(persisted.includes(`RACE_${i}`), `RACE_${i} was lost — only ${persisted.join(',')}`);
   }
   assert.equal(stateRoot.length > 0, true);
+});
+
+// The review that produced `saveSecretsWithinLock`: two UNRELATED keys saved at
+// once, both handlers answering 200, one key silently gone — 20 runs out of 20.
+// Nothing about this is Google-specific. `saveSecrets` rewrites the WHOLE file,
+// so every save is a read-modify-write of one file and the pool lock covering
+// only the pool-touching half left the ordinary case unprotected. The test names
+// three different variables so a fix that only special-cases the pool still fails.
+test('concurrent saves of DIFFERENT keys all survive — the file is one transaction', async () => {
+  const { saveSecrets } = await import('../src/setup/secrets.js');
+  const { STATE_DIR } = await import('../src/config.js');
+  const { readFile } = await import('node:fs/promises');
+
+  await Promise.all([
+    saveSecrets({ OPENROUTER_API_KEY: 'sk-concurrent-A' }),
+    saveSecrets({ FISH_API_KEY: 'fish-concurrent-B' }),
+    saveSecrets({ DEEPSEEK_API_KEY: 'ds-concurrent-C' }),
+  ]);
+
+  const onDisk = await readFile(`${STATE_DIR}/secrets.env`, 'utf8');
+  for (const [envVar, value] of [
+    ['OPENROUTER_API_KEY', 'sk-concurrent-A'],
+    ['FISH_API_KEY', 'fish-concurrent-B'],
+    ['DEEPSEEK_API_KEY', 'ds-concurrent-C'],
+  ] as const) {
+    assert.ok(
+      onDisk.includes(value),
+      `${envVar} was lost to a concurrent save — the file holds only: ${onDisk.replace(/\n/g, ' | ')}`,
+    );
+  }
 });
 
 test('the lock rejects nothing: a failing mutation does not wedge the pool', async () => {
@@ -1161,8 +1275,13 @@ test('a replayed exhausted-pool response keeps the Retry-After header', async ()
     // backup leg from ever being selected.
     const replay = await googleKeyFetch('https://example.test/v1/x', {});
     assert.equal(replay.status, 429);
-    assert.ok(replay.headers.get('retry-after'),
-      'the replay must carry a retry hint or the retry layer mis-times the fallback');
+    // The UPSTREAM value, not merely a hint: the caller sets a 60s default when
+    // the record carries none, so asserting only that SOME retry-after exists
+    // passed even with the recorded headers thrown away — which is the defect
+    // this test exists for. A 3600s hold replayed as 60s mis-times the retry
+    // layer and can prevent the backup leg from ever being selected.
+    assert.equal(replay.headers.get('retry-after'), '3600',
+      'the replay must carry the upstream retry hint, not the fallback default');
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -1175,4 +1294,244 @@ test('the recorded failure keeps the headers a classifier reads', () => {
   assert.equal(kept['retry-after'], '120');
   assert.equal(kept['x-trace-id'], undefined,
     'tracing metadata must not ride along in a response the SDK treats as real');
+});
+
+// ─── a cached client cannot outlive the pool ─────────────────────────────────
+// The bug: `createGoogleGenerativeAI` captures `apiKey` at CONSTRUCTION, and the
+// client cache was keyed on operator configuration that did not include the pool.
+// So a client built while key A was live kept A after A was removed from the pool.
+// It stayed invisible while a pool existed — googleKeyFetch re-stamps the header
+// on every request — and surfaced the moment the pool was emptied and the
+// transport stopped re-stamping: a deleted credential going out on the wire.
+
+test('a cached client does not keep using a key the pool no longer contains', async () => {
+  const { generateText } = await import('ai');
+  const { languageModel, __clearClientCacheForTest } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  __clearClientCacheForTest();
+  const seen: string[] = [];
+  globalThis.fetch = (async (_url: any, init: any) => {
+    seen.push(new Headers(init?.headers || {}).get('x-goog-api-key') || '');
+    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+  }) as unknown as typeof fetch;
+
+  const cfg = () => ({ provider: 'google', model: 'gemini-3.5-flash-lite', apiKey: '', baseUrl: '', ollamaUrl: '', reasoning: false, numCtx: undefined, repeatPenalty: undefined, headers: undefined, compatibleMode: undefined });
+  const call = async () => {
+    await generateText({ model: languageModel(cfg() as any), prompt: 'hi', maxOutputTokens: 8 }).catch(() => {});
+  };
+
+  try {
+    setPool(K1);
+    await call();
+    assert.ok(seen.includes(K1), `expected K1 to be used while configured, saw ${JSON.stringify(seen)}`);
+
+    // The operator removes K1 and the pool ends up empty. Whatever happens next,
+    // K1 must not be what the station sends.
+    setPool();
+    seen.length = 0;
+    await call();
+
+    assert.ok(
+      !seen.includes(K1),
+      `a removed key was still sent after the pool changed: ${JSON.stringify(seen)}`,
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+    setPool();
+  }
+});
+
+test('a client can be built while every key is held, and works once the hold lapses', async () => {
+  const { generateText } = await import('ai');
+  const { languageModel, __clearClientCacheForTest } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  let status = 200;
+  globalThis.fetch = (async () => new Response(
+    status === 200
+      ? JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] })
+      : JSON.stringify({ error: { code: 429, message: 'quota', details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '30s' }] } }),
+    { status, headers: { 'content-type': 'application/json' } },
+  )) as unknown as typeof fetch;
+
+  const cfg = { provider: 'google', model: 'gemini-3.5-flash-lite', apiKey: '', baseUrl: '', ollamaUrl: '', reasoning: false, numCtx: undefined, repeatPenalty: undefined, headers: undefined, compatibleMode: undefined };
+  try {
+    setPool(K1);
+    // K1 429s and is parked for 30s.
+    status = 429;
+    await generateText({ model: languageModel(cfg as any), prompt: 'hi', maxOutputTokens: 8 }).catch(() => {});
+    assert.equal(allKeysHeld(), true, 'precondition: the only key is parked');
+
+    // Clear the cache HERE, not at the top. The call above already built and
+    // cached a client — while K1 was still live, so its construction key was
+    // perfectly good — and the signature is unchanged by a hold. Without this the
+    // `languageModel` call below is a cache hit and `googleApiKeyForSdk` is never
+    // reached, which is exactly how this test passed against broken code.
+    __clearClientCacheForTest();
+
+    // The whole pool is held. Building a client must still WORK: `currentKey()`
+    // is empty here, and falling straight through to the legacy singular
+    // variable left a pool-only station with no construction credential at all.
+    // The SDK then throws LoadAPIKeyError BEFORE the fetch runs — measured: zero
+    // fetch calls — so googleKeyFetch never gets to replay the held-pool 429 and
+    // the station can never notice the hold lapsed. A wait it cannot come out of.
+    const model = languageModel(cfg as any);
+    assert.ok(model, 'a client must be constructible while the pool is fully held');
+
+    // And once the hold lapses the SAME client works — which is the reviewer's
+    // "even after the holds expire" half.
+    __expireHoldsForTest();
+    status = 200;
+    const out = await generateText({ model, prompt: 'hi', maxOutputTokens: 8 });
+    assert.ok(out.text, 'the client built during the hold must serve once the hold lapses');
+  } finally {
+    globalThis.fetch = realFetch;
+    setPool();
+  }
+});
+
+// ─── only a real answer clears a key's history ──────────────────────────────
+// The bug: the transport called reportKeySuccess for anything that was not a 429
+// or a 401, so a 503 (Google briefly overloaded) and a 403 (this project refuses
+// the request) each cleared the hold, zeroed the escalation strikes and dropped
+// the pool's recorded failure. Neither says the quota came back — both arrive on
+// keys that are usually already parked. The pool reported itself healthy while
+// every key in it was still spent, and the next real 429 restarted the ladder
+// from its shortest rung.
+
+// A key whose hold has LAPSED but whose failure history has not: the state a real
+// pool is in between two 429s, and the only state in which a non-quota status can
+// reach the wire at all. With every key still parked the transport short-circuits
+// and replays the recorded 429, so a test that leaves the pool fully held never
+// exercises the path it claims to — which is how the first draft of these two
+// passed against the unfixed code while asserting nothing about 503 or 403.
+//
+// The hold is made to lapse for real, with a 1ms RetryInfo and a real wait,
+// rather than through `__expireHoldsForTest()` — that helper clears the strike
+// ladder as well as the holds, so it cannot model the state under test. It was
+// doing exactly that here, and the assertion below passed against the unfixed
+// code for the same reason it should have failed.
+async function lapsedButTainted(fetchImpl: () => Promise<Response>): Promise<number> {
+  setPool(K1);
+  globalThis.fetch = (async () => new Response(
+    JSON.stringify({ error: { code: 429, message: 'quota', details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '1ms' }] } }),
+    { status: 429, headers: { 'content-type': 'application/json' } },
+  )) as unknown as typeof fetch;
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  await googleKeyFetch('https://example.test/v1/x', {});
+  const strikes = poolStatus()[0].strikes;
+  assert.ok(strikes >= 1, 'precondition: the key carries a failure');
+  assert.ok(getLastFailure(), 'precondition: a quota failure is on record');
+  await new Promise(r => setTimeout(r, 10));   // the hold lapses; the evidence does not
+  globalThis.fetch = fetchImpl as unknown as typeof fetch;
+  return strikes;
+}
+
+test('a 503 does not reset a key\'s quota history', async () => {
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  const strikesBefore = await lapsedButTainted(async () => new Response(
+    JSON.stringify({ error: { code: 503, message: 'The service is currently unavailable.' } }),
+    { status: 503, headers: { 'content-type': 'application/json' } },
+  ));
+  try {
+    const res = await googleKeyFetch('https://example.test/v1/x', {});
+    assert.equal(res.status, 503, 'a 503 must be handed back untouched');
+    assert.equal(poolStatus()[0].strikes, strikesBefore, 'a 503 must not reset the escalation ladder');
+    assert.ok(getLastFailure(), 'a 503 must not drop the recorded quota failure');
+  } finally {
+    globalThis.fetch = realFetch;
+    setPool();
+  }
+});
+
+test('a 403 does not reset quota history — it is not the credential failing', async () => {
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  const strikesBefore = await lapsedButTainted(async () => new Response(
+    JSON.stringify({ error: { code: 403, message: 'The caller does not have permission' } }),
+    { status: 403, headers: { 'content-type': 'application/json' } },
+  ));
+  try {
+    const res = await googleKeyFetch('https://example.test/v1/x', {});
+    assert.equal(res.status, 403, 'a 403 must be handed back, not rotated away');
+    assert.equal(poolStatus()[0].strikes, strikesBefore, 'a 403 must not reset the escalation ladder');
+    assert.ok(getLastFailure(), 'a 403 must not drop the recorded quota failure');
+  } finally {
+    globalThis.fetch = realFetch;
+    setPool();
+  }
+});
+
+test('a 429 then a 200 on the same key does clear it — the fix is not over-broad', async () => {
+  // The guard above must not become "nothing ever clears". A key that answers is
+  // demonstrably not exhausted, and leaving its hold in place would shrink the
+  // pool for no reason — which is the failure the success-reset behaviour was
+  // introduced to stop.
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  let status = 429;
+  globalThis.fetch = (async () => new Response(
+    status === 429
+      ? JSON.stringify({ error: { code: 429, message: 'quota', details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '30s' }] } })
+      : JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] }),
+    { status, headers: { 'content-type': 'application/json' } },
+  )) as unknown as typeof fetch;
+  try {
+    setPool(K1);
+    await googleKeyFetch('https://example.test/v1/x', {});
+    assert.equal(allKeysHeld(), true, 'precondition: the only key is parked');
+    assert.ok(getLastFailure(), 'precondition: a failure is on record');
+
+    __expireHoldsForTest();
+    status = 200;
+    await googleKeyFetch('https://example.test/v1/x', {});
+
+    assert.equal(allKeysHeld(), false, 'a 200 must release the key');
+    assert.equal(getLastFailure(), null, 'a 200 must drop the recorded failure');
+  } finally {
+    globalThis.fetch = realFetch;
+    setPool();
+  }
+});
+
+// ─── reserved separators ─────────────────────────────────────────────────────
+// The bug: `/add` checked that a key was non-empty and within the length bound,
+// but the pool format's own separators were unchecked. `parsePool` splits on a
+// comma and `serializePool` joins on one, so pasting `AIzaX,AIzaY` persisted TWO
+// credentials from one paste — the operator was told one key was added and got a
+// pool of two, one of which they never configured. A colon was worse: it is the
+// key/name boundary, so `AIzaX:junk` persisted a key truncated at the colon,
+// which reports a fingerprint, looks configured, and 401s forever.
+
+test('a key carrying a reserved separator is refused, not silently reshaped', () => {
+  const comma = poolKeyProblem(`${K1},${K2}`);
+  assert.match(String(comma), /comma/, 'a comma must be named, since it becomes a second credential');
+  const colon = poolKeyProblem(`${K1}:Free tier`);
+  assert.match(String(colon), /colon/, 'a colon must be named, since it truncates the key');
+  assert.equal(poolKeyProblem(''), 'key is required');
+  assert.equal(poolKeyProblem(K1), null, 'a real key must pass');
+  assert.match(String(poolKeyProblem('x'.repeat(GOOGLE_KEY_MAX + 1))), /at most/);
+});
+
+test('the add endpoint validates separators before it persists anything', async () => {
+  // Driven through the ROUTE, not the helper: the helper existing is not the
+  // contract, the endpoint calling it is. A comma key must not reach
+  // serializePool, where it would split into two entries.
+  const core = readFileSync(new URL('../src/routes/settings/core.ts', import.meta.url), 'utf8');
+  const handler = core.slice(core.indexOf("google-key-pool/add'"), core.indexOf("google-key-pool/move'"));
+  assert.match(handler, /poolKeyProblem\(trimmed\)/, 'the add endpoint must validate reserved separators');
+  assert.ok(
+    handler.indexOf('poolKeyProblem(trimmed)') < handler.indexOf('serializePool(entries)'),
+    'validation must happen BEFORE the pool is serialised',
+  );
+});
+
+test('a comma in one pasted key never becomes two credentials', () => {
+  // The end-to-end shape, at the parse level: what the operator would have got.
+  setPool(`${K1},${K2}`);
+  assert.equal(poolSize(), 2, 'this is the bug being pinned — one paste, two slots');
+  // And the fix at the boundary means that shape can no longer be WRITTEN.
+  assert.ok(poolKeyProblem(`${K1},${K2}`), 'so the entry point refuses it');
 });

@@ -111,13 +111,7 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
       recapLimit: String(v.djBehaviour?.recapLimit ?? 10),
       recapMinutes: String(v.djBehaviour?.recapMinutes ?? 120),
       recapChars: String(v.djBehaviour?.recapChars ?? 140),
-      allowRequestShoutOuts: v.djBehaviour?.allowRequestShoutOuts === true,
-      allowRequestSkills: v.djBehaviour?.allowRequestSkills === true,
-      requestChatPrompt: v.djBehaviour?.requestChatPrompt ?? '',
-      requestTrackPrompt: v.djBehaviour?.requestTrackPrompt ?? '',
     },
-    djSpeakClock: v.djSpeakClock === true,
-    handoverOffsetMinutes: String(v.handover?.offsetMinutes ?? 0),
     weather: {
       lat: String(v.weather?.lat ?? ''),
       lng: String(v.weather?.lng ?? ''),
@@ -233,8 +227,6 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
       maxOutputTokens: typeof v.llm?.maxOutputTokens === 'number' ? v.llm.maxOutputTokens : 0,
       discoverySteps: typeof v.llm?.discoverySteps === 'number' ? v.llm.discoverySteps : 0,
       geminiSafety: normalizeGeminiSafety(v.llm?.geminiSafety),
-      banterPrompt: v.llm?.banterPrompt ?? '',
-      listenerPrompt: v.llm?.listenerPrompt ?? '',
       fallback: {
         enabled: !!v.llm?.fallback?.enabled,
         provider: v.llm?.fallback?.provider ?? 'ollama',

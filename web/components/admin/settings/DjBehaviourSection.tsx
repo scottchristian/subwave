@@ -2,10 +2,8 @@
 
 import { Label } from '../../ui/label';
 import { Input } from '../../ui/input';
-import { Textarea } from '../../ui/textarea';
 import { Card, Seg } from '../ui';
 import { fieldAria } from '../../../lib/form';
-
 import {
   SectionHeader, SaveBar, SettingsFieldError, settingsFieldAria,
   type SectionProps,
@@ -259,67 +257,6 @@ export function DjBehaviourSection({ form, setForm, busy, saveSettings, fieldErr
           <p {...linkStyleAria.descriptionProps} className="mt-2 text-[13px] leading-[1.55] text-muted">
             Release years stay verified in the library. This controls how often one is supplied
             to the DJ for a link, keeping factual grounding intact without making every link sound like metadata.
-          </p>
-        </div>
-      </Card>
-
-      <Card title="Listener request chat" sub={`shout-outs ${form.djBehaviour.allowRequestShoutOuts ? 'on' : 'off'} · skills ${form.djBehaviour.allowRequestSkills ? 'on' : 'off'}`}>
-        <div className="field">
-          <Label>Allow shout-outs &amp; jokes</Label>
-          <Seg
-            value={form.djBehaviour.allowRequestShoutOuts ? 'on' : 'off'}
-            options={[
-              { id: 'off', label: 'Off', title: 'DJ only responds to music requests' },
-              { id: 'on', label: 'On', title: 'DJ will fulfill explicit shout-outs and jokes in the ack' },
-            ]}
-            onChange={v => setForm(f => ({ ...f, djBehaviour: { ...f.djBehaviour, allowRequestShoutOuts: v === 'on' } }))}
-          />
-          <p className="mt-2 text-[13px] leading-[1.55] text-muted">
-            When on, the DJ will deliver shout-outs, call out names, and tell jokes in character
-            when a listener explicitly asks for one in their request.
-          </p>
-        </div>
-        <div className="field mt-5">
-          <Label>Allow station skill triggers</Label>
-          <Seg
-            value={form.djBehaviour.allowRequestSkills ? 'on' : 'off'}
-            options={[
-              { id: 'off', label: 'Off', title: 'Skills can only be triggered by the schedule or an admin' },
-              { id: 'on', label: 'On', title: 'Listeners can ask the DJ to run a skill (weather, grog, etc.)' },
-            ]}
-            onChange={v => setForm(f => ({ ...f, djBehaviour: { ...f.djBehaviour, allowRequestSkills: v === 'on' } }))}
-          />
-          <p className="mt-2 text-[13px] leading-[1.55] text-muted">
-            When on, requests like &ldquo;what&rsquo;s the weather?&rdquo; or &ldquo;check the grog prices&rdquo; will trigger
-            the matching station skill immediately on-air.
-          </p>
-        </div>
-        <div className="field mt-5">
-          <Label>Request chat prompt</Label>
-          <Textarea
-            id="dj-request-chat-prompt"
-            rows={6}
-            value={form.djBehaviour.requestChatPrompt}
-            onChange={e => setForm(f => ({ ...f, djBehaviour: { ...f.djBehaviour, requestChatPrompt: e.target.value } }))}
-            placeholder="Instructions the DJ receives when responding to shout-outs and jokes…"
-          />
-          <p className="mt-2 text-[13px] leading-[1.55] text-muted">
-            This is the <strong>complete</strong> instruction the DJ gets for chat requests — not
-            an addition to a hardcoded rule. Edit freely to change the tone, style, or what the
-            DJ is allowed to say. Changes take effect on the next request.
-          </p>
-        </div>
-        <div className="field mt-5">
-          <Label>Music request intro prompt</Label>
-          <Textarea
-            id="dj-request-track-prompt"
-            rows={5}
-            value={form.djBehaviour.requestTrackPrompt ?? ''}
-            onChange={e => setForm(f => ({ ...f, djBehaviour: { ...f.djBehaviour, requestTrackPrompt: e.target.value } }))}
-            placeholder="Instructions the DJ receives when writing an intro for a music request…"
-          />
-          <p className="mt-2 text-[13px] leading-[1.55] text-muted">
-            This instruction is appended to the system prompt when fulfilling a standard music request. Use this to control the length, tone, or specific details the DJ should mention (or ignore) when acknowledging the request over the track's intro.
           </p>
         </div>
       </Card>

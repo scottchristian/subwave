@@ -14,7 +14,7 @@ export interface AgentDefinition<TArgs = Record<string, any>, TExtras = any> {
   // state (the picker swaps its transition-field coaching off when the on-air
   // persona isn't in DJ mode) instead of being frozen at module load.
   schema?: any | (() => any);
-  buildSystem: (args: TArgs) => string;
+  buildSystem: (args: TArgs) => string | Promise<string>;
   buildTools?: (args: TArgs) => { tools: any; extras?: TExtras };
   maxSteps?: number;
   // A function form is resolved at each run, so the deadline can follow a
@@ -81,7 +81,7 @@ export function defineAgent<TArgs = Record<string, any>, TExtras = any>(
     providerDiscoveryBudget: def.providerDiscoveryBudget === true,
     async run({ messages, telemetry, ...rest }) {
       const toolArgs = rest as TArgs;
-      const system = def.buildSystem(toolArgs);
+      const system = await def.buildSystem(toolArgs);
       // An agent with no buildTools has no extras. `extras` stays typed as
       // TExtras on the result rather than TExtras | undefined, because the only
       // agents that read it are the ones that build tools — widening it would

@@ -100,7 +100,6 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
 const app = express();
-app.set('trust proxy', true);
 
 configureHttp(app);
 
@@ -238,7 +237,7 @@ app.listen(config.server.port, async (err?: Error) => {
   try {
     const { seedDailyUsageFromLog } = await import('./llm/log.js');
     const seeded = await seedDailyUsageFromLog();
-    if (seeded.tokens > 0) console.log(`[budget] resumed today's LLM usage: ${seeded.tokens} tokens`);
+    if (seeded > 0) console.log(`[budget] resumed today's LLM usage: ${seeded} tokens`);
   } catch (err: any) {
     console.error('[budget] seed failed:', err.message);
   }

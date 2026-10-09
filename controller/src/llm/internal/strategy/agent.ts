@@ -3,20 +3,8 @@
 // Recovery proceeds through done-only, terminal collapse (#1157), then text salvage.
 // All attempts share one deadline; throw so callers can use their stateless fallback.
 
-import { Output, isStepCount, hasToolCall, ToolLoopAgent, tool } from 'ai';
+import { Output, isStepCount, hasToolCall, ToolLoopAgent, ToolChoiceViolationError, tool } from 'ai';
 import type { ModelMessage, ToolSet, ToolLoopAgentSettings } from 'ai';
-
-// ToolChoiceViolationError was added in ai@7.0.90+; fallback for older versions
-let ToolChoiceViolationError: any;
-try {
-  const ai = await import('ai');
-  ToolChoiceViolationError = ai.ToolChoiceViolationError;
-} catch {
-  class ToolChoiceViolationErrorClass extends Error {
-    constructor(message: string) { super(message); this.name = 'ToolChoiceViolationError'; }
-  }
-  ToolChoiceViolationError = ToolChoiceViolationErrorClass;
-}
 import { z } from 'zod';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry, withDeadline } from '../core/retry.js';

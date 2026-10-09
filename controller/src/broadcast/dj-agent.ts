@@ -131,7 +131,7 @@ async function repickRequestFromSeen({ seen, badId, requester, text, persona }:
   }));
   try {
     return await djObject({
-      system: requestSystem(persona),
+      system: await requestSystem(persona),
       prompt: JSON.stringify({ candidates: [...seen.values()] }, null, 2)
         + `\n\n${isNamedRequester(requester) ? `Listener "${requester}" asked` : 'An unnamed listener asked'}: "${text}". The id you returned (${badId ?? 'none'}) matches none of the candidates above. Choose the best candidate id from the list for this request, and write "ack"${wantIntro ? ' and "intro"' : ''} to match.`,
       schema,

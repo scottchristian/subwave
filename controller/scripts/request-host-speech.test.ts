@@ -132,7 +132,7 @@ test('both stateless route cascades use the shared request provenance seam', () 
 
 test('the request-agent system prompt accepts the captured writer explicitly', async () => {
   await settings.update({ shows: [show(B.id)] } as never);
-  const prompt = requestSystem(A);
+  const prompt = await requestSystem(A);
   assert.match(prompt, /Host A/);
   assert.doesNotMatch(prompt, /Host B/);
 });

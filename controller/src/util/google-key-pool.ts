@@ -38,7 +38,7 @@ export const GOOGLE_POOL_MAX = 50;
 interface Hold {
   until: number;
   /** Mirrors GeminiFailure, minus 'billing'/'other' which never park. */
-  reason: 'daily' | 'burst' | 'auth' | 'unknown'; // eslint-disable-line @typescript-eslint/no-unused-vars
+  reason: 'daily' | 'burst' | 'auth' | 'unknown';
 }
 
 export interface PoolEntry {
@@ -495,7 +495,7 @@ export function entryId(key: string): string {
  */
 let revision = 0;
 
-export function poolRevision(): number { // eslint-disable-line @typescript-eslint/no-unused-vars
+export function poolRevision(): number {
   return revision;
 }
 

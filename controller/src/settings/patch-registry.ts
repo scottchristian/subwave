@@ -218,7 +218,6 @@ export const SETTINGS_PATCH_SCHEMAS: Readonly<Partial<Record<SettingsPatchKey, S
   picker: pickerPatchSchema,
   station: stationSchema,
   stationDescription: stationDescriptionSchema,
-  timezone: timezoneSchema,
   locale: localeSchema,
   djHouseRules: djHouseRulesSchema,
   djBehaviour: djBehaviourPatchSchema,

@@ -825,20 +825,7 @@ export async function runCapability(
         lastFired.set(cap.kind, Date.now());
         segmentState.lastAnySegment = Date.now();
         
-        let announcePersona = persona || automaticHostSpeech ? speaker : null;
-        const voiceMatch = verbatimText.match(/^\[voice:([^\]]+)\]/i);
-        if (voiceMatch) {
-            // Force this announcement to use the remote TTS engine (gemini_tts.py) 
-            // so the [voice:] tag or the specified voice is correctly rendered.
-            announcePersona = {
-                ...(announcePersona || {}),
-                tts: {
-                    ...((announcePersona as any)?.tts || {}),
-                    engine: 'remote',
-                    voice: voiceMatch[1]
-                }
-            } as Persona;
-        }
+        const announcePersona = persona || automaticHostSpeech ? speaker : null;
 
         const result = await queue.announce(verbatimText, cap.kind, announcePersona
           ? { persona: announcePersona, meta: { personaId: speaker?.id, personaName: speaker?.name }, pauseTalkEligible }
