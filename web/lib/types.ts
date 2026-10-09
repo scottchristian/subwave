@@ -147,8 +147,14 @@ export interface QueueEntry {
   album?: string;
   subsonic_id?: string;
   requestedBy?: string;
-  /** ISO timestamp present on history entries. */
+  /** ISO timestamp on older payloads; the live controller sends the three
+   *  below instead. All are live-edge. */
   t?: string;
+  /** When the track started airing; set once it reaches the air. */
+  startedAt?: string;
+  endedAt?: string;
+  /** When it joined the queue — earlier than it aired, often by minutes. */
+  queuedAt?: string;
   /** True once the controller has handed this item to Liquidsoap. */
   sent?: boolean;
   /** The track arrives via a pre-rendered stem blend rather than a plain
@@ -216,7 +222,9 @@ export type SessionRole = 'segment' | 'dj' | 'track' | 'system' | string;
  *  tail (`meta.carried: true`, `meta.carriedFrom`, `meta.personaName`) and
  *  one `role: 'event'`, `kind: 'show-boundary'` separator whose
  *  `meta.boundary` is `{ at, show, persona, fromShow, fromSessionId }` (#1690).
- *  See isCarriedTurn / isShowBoundary in lib/sessionFeed. */
+ *  See isCarriedTurn / isShowBoundary in lib/sessionFeed.
+ *  Spoken turns also carry `meta.airedAt` (the live-edge moment the words
+ *  began, #1382) and `meta.durationMs` (the clip's length, #1848). */
 export interface SessionTurn {
   t?: string | number;
   role?: SessionRole;
